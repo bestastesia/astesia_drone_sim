@@ -1,0 +1,17 @@
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.idea/
+*.orig
+*.swp
+*.swo
+.DS_Store
+colcon.pref*
+# 不提交 rosbag（体积大）
+bag_*/
+*.db3
+*.mcap

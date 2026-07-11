@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>drone_bringup</name>
+  <version>0.0.0</version>
+  <description>Launch files, configs, RViz preset, scripts, and report for asteesia_drone_sim.</description>
+  <maintainer email="astesia@example.com">astesia</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>drone_common</exec_depend>
+  <exec_depend>drone_dynamics</exec_depend>
+  <exec_depend>drone_controller</exec_depend>
+  <exec_depend>drone_map</exec_depend>
+  <exec_depend>drone_planner</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
