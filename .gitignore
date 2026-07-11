@@ -11,6 +11,11 @@ __pycache__/
 *.swo
 .DS_Store
 colcon.pref*
+# claude/nexus 本地工作产物
+.nexus/
+workflow-friction.log
+*.friction.log
+
 # 不提交 rosbag（体积大）
 bag_*/
 *.db3
