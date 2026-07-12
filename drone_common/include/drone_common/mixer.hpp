@@ -35,6 +35,7 @@
 
 #include <Eigen/Dense>
 #include <array>
+#include <cassert>
 
 namespace drone_common {
 
@@ -44,6 +45,10 @@ using MotorSq = Eigen::Vector4d;       // [ω1², ω2², ω3², ω4²]
 // 由物理参数构建 4×4 控制分配矩阵 B。
 // arm_length 单位 m，k_F 单位 N·s²/rad²，k_M 单位 N·m·s²/rad²。
 inline Eigen::Matrix4d buildMixerMatrixB(double arm_length, double k_F, double k_M) {
+  // 参数 sanity：负或零会致 B 奇异/符号翻转 → 炸机。Debug 构建会触发，Release 仍跑（由调用方兜底）。
+  assert(k_F > 0.0);
+  assert(k_M > 0.0);
+  assert(arm_length > 0.0);
   const double l = arm_length;
   const double a = l / std::sqrt(2.0) * k_F;  // roll/pitch 臂系数
   Eigen::Matrix4d B;
@@ -65,8 +70,12 @@ inline Eigen::Matrix4d buildMixerMatrixInverse(double arm_length, double k_F, do
 }
 
 // 给定 wrench [F, τx, τy, τz]，反解 4 个 ω²。
+// ω² 物理上必须非负（电机不能反转）；B⁻¹ 在低速大 yaw 等工况可能解出负值，
+// 这里 cwiseMax(0) 兜底——等价于"该电机停转"，代价是 yaw authority 下降（README 注明）。
 inline MotorSq wrenchToMotorSq(const Eigen::Matrix4d& B_inv, const Wrench& w) {
-  return B_inv * w;
+  MotorSq u = B_inv * w;
+  u = u.cwiseMax(0.0);
+  return u;
 }
 
 // 给定 4 个 ω²，得到 wrench。

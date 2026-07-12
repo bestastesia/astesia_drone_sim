@@ -33,6 +33,7 @@
 - **本包测试链接 ALIAS**：`ament_add_gtest` 的目标链 `drone_common::drone_common` 报 target not found。→ 本包内测试链本地非命名空间 `drone_common`，仅 downstream 用命名空间版本。
 - **git 首次 push `源引用规格 main 没有匹配`**：本地分支是 `master`。→ `git branch -M main`。
 - **git HTTPS 推送 `could not read Username`**：非交互环境无法输入凭据。→ 改用 SSH（生成 ed25519 key + 加 GitHub）。
+- **Assert 在 Release 被关掉**：在 mixer 加 `assert(k_F>0)` 等参数校验后，实测默认 Debug 构建会 abort 守住负参数（退出码 134），但 `-DNDEBUG`（Release/RelWithDebInfo）下 assert 被编译掉、默默放过错误。→ assert 只作 Debug 兜底，dynamics/controller 节点启动时还须显式 `RCLCPP_ERROR` 校验参数并退出（Step 2/3 落实）。常驻防炸（`wrenchToMotorSq` 的 `cwiseMax(0)` 非负 clamp）不依赖构建类型。
 
 ## 6. 如何验证动力学、控制器和 ROS2 topic 是否正确
 - **drone_common**：`colcon test` 跑 7 条 gtest，验证 B·B⁻¹≈I、hover/roll/yaw/pitch 符号、四元数积分解析一致性、vee(skew) 逆。回归网随仓库进 git。

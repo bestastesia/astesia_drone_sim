@@ -51,6 +51,20 @@ TEST(Mixer, YawTorqueSign) {
   EXPECT_GT(u(3), u(2));  // BR > BL
 }
 
+TEST(Mixer, NegativeOmegaSquaredClamped) {
+  // 纯力矩 wrench 会从 B⁻¹ 解出负 ω²；wrenchToMotorSq 必须 clamp 到 ≥0，
+  // 不能把负值传给 sqrt（否则 NaN 炸机）。
+  const double l = 0.2, kF = 1.0, kM = 0.05;
+  auto Binv = drone_common::buildMixerMatrixInverse(l, kF, kM);
+  Wrench w; w << 0, 1.0, 0, 0;  // 纯 +roll
+  MotorSq u = drone_common::wrenchToMotorSq(Binv, w);
+  for (int i = 0; i < 4; ++i) EXPECT_GE(u(i), 0.0);
+  // 还要确认真有 clamping 发生（至少一个被压到 0），否则这条测试是哑的
+  int zeros = 0;
+  for (int i = 0; i < 4; ++i) if (u(i) == 0.0) ++zeros;
+  EXPECT_GT(zeros, 0) << "纯力矩应使某些 ω² 为负再被 clamp 到 0";
+}
+
 TEST(Math, QuaternionIntegrateZAxis) {
   drone_common::Quatd q = drone_common::Quatd::Identity();
   drone_common::Vec3d omega(0, 0, 0.5);
