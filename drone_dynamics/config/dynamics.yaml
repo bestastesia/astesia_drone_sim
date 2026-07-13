@@ -1,0 +1,16 @@
+# drone_dynamics 默认参数 (SI)
+drone_dynamics:
+  ros__parameters:
+    mass: 1.0
+    inertia: [0.02, 0.02, 0.04]
+    k_F: 1.0
+    k_M: 0.05
+    arm_length: 0.2
+    motor_tau: 0.02
+    omega_min: 0.0
+    omega_max: 1000.0
+    sim_dt: 0.001
+    add_linear_drag: false
+    drag_coeff: 0.1
+    init_pose: [0.0, 0.0, 0.0, 0.0]
+    frame_id: "map"
