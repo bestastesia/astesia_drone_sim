@@ -11,12 +11,18 @@ def generate_launch_description():
             executable='dynamics_node',
             name='drone_dynamics',
             output='screen',
+            parameters=[PathJoinSubstitution([
+                FindPackageShare('drone_dynamics'), 'config', 'dynamics.yaml'
+            ])],
         ),
         Node(
             package='drone_controller',
             executable='controller_node',
             name='drone_controller',
             output='screen',
+            parameters=[PathJoinSubstitution([
+                FindPackageShare('drone_controller'), 'config', 'controller.yaml'
+            ])],
             remappings=[('/drone/safe_goal', '/drone/goal')],
         ),
         Node(
