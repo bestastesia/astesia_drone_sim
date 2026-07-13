@@ -19,7 +19,8 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(drone_common REQUIRED)
 
-add_executable(controller_node src/placeholder_node.cpp)
+add_executable(controller_node src/controller_node.cpp)
+target_include_directories(controller_node PRIVATE include)
 target_link_libraries(controller_node drone_common::drone_common)
 ament_target_dependencies(controller_node
   rclcpp std_msgs geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs

@@ -1,0 +1,52 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Class: rviz_default_plugins/Grid
+      Name: Grid
+    - Class: rviz_default_plugins/TF
+      Name: TF
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Topic: /drone/odom
+    - Class: rviz_default_plugins/Path
+      Name: Path (history)
+      Topic: /drone/path
+      Color: 100; 200; 100
+    - Class: rviz_default_plugins/Path
+      Name: Path (planned)
+      Topic: /drone/planned_path
+      Color: 255; 255; 0
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Obstacles
+      Topic: /map/obstacles
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Drone Marker
+      Topic: /drone/drone_marker
+    - Class: rviz_default_plugins/Marker
+      Name: Goal
+      Topic: /drone/goal
+    - Class: rviz_default_plugins/Marker
+      Name: Safe Goal
+      Topic: /drone/safe_goal
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/SetInitialPose
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /drone/goal
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 10
+      Focal Point: {X: 0, Y: 0, Z: 1}
+  Value: true

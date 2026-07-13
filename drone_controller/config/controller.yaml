@@ -1,0 +1,25 @@
+# drone_controller 默认参数 (SI)
+drone_controller:
+  ros__parameters:
+    mass: 1.0
+    arm_length: 0.2
+    k_F: 1.0
+    k_M: 0.05
+    Kp_pos: [3.0, 3.0, 5.0]
+    Kd_pos: [1.5, 1.5, 2.5]
+    Ki_pos: [0.0, 0.0, 0.0]
+    Ki_max: 1.0
+    a_xy_max: 5.0
+    a_z_min: -3.0
+    a_z_max: 8.0
+    a_max_vec: 10.0
+    d_far: 10.0
+    Kp_att: [10.0, 10.0, 5.0]
+    Kd_rate: [3.0, 3.0, 2.0]
+    F_min: 0.0
+    F_max: 39.24
+    tau_max: 5.0
+    omega_max: 1000.0
+    rpm_min: 0.0
+    rpm_max: 10000.0
+    ctrl_dt: 0.005
