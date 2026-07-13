@@ -8,4 +8,10 @@ install(DIRECTORY launch config rviz scripts
   OPTIONAL
 )
 
+# Python scripts as executables (so ros2 run can find them)
+install(PROGRAMS
+  scripts/waypoint_sender.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
