@@ -1,59 +1,67 @@
 #!/usr/bin/env python3
 """
-waypoint_sender.py — 按顺序发布多目标点（正方形航线等）
+waypoint_sender.py — 按顺序发布多目标点（不依赖 rclpy，绕过 conda Python 冲突）
 用法:
   ros2 run drone_bringup waypoint_sender.py
-  ros2 run drone_bringup waypoint_sender.py --ros-args -p waypoints:="[[0,0,1.5],[2,0,1.5],[2,2,1.5],[0,2,1.5],[0,0,1.5]]" -p hold_time:=5.0
+  ros2 run drone_bringup waypoint_sender.py --ros-args -p waypoints:="[[0,0,1.5],[2,0,1.5]]" -p hold_time:=4.0
+
+注意: 脚本内部用 subprocess 调 ros2 topic pub，因此需要 ros2 在 PATH。
 """
 import json
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+import subprocess
+import sys
+import time
+import argparse
 
-class WaypointSender(Node):
-    def __init__(self):
-        super().__init__('waypoint_sender')
-        default_wps = "[[0.0,0.0,1.5],[2.0,0.0,1.5],[2.0,2.0,1.5],[0.0,2.0,1.5],[0.0,0.0,1.5]]"
-        self.declare_parameter('waypoints', default_wps)
-        self.declare_parameter('hold_time', 5.0)
+DEFAULT_WAYPOINTS = "[[0.0,0.0,1.5],[2.0,0.0,1.5],[2.0,2.0,1.5],[0.0,2.0,1.5],[0.0,0.0,1.5]]"
 
-        raw = self.get_parameter('waypoints').get_parameter_value().string_value
-        self.waypoints_ = json.loads(raw)
+def pub_goal(x, y, z):
+    """通过 ros2 topic pub 发布一个 PoseStamped"""
+    cmd = [
+        'ros2', 'topic', 'pub', '--once',
+        '/drone/goal', 'geometry_msgs/msg/PoseStamped',
+        f'{{header: {{frame_id: "map"}}, pose: {{position: {{x: {x}, y: {y}, z: {z}}}}}}}'
+    ]
+    subprocess.run(cmd, capture_output=True)
 
-        self.hold_time_ = self.get_parameter('hold_time').get_parameter_value().double_value
-        self.pub_ = self.create_publisher(PoseStamped, '/drone/goal', 10)
-        self.idx_ = 0
-        self.at_wp_since_ = None
-        self.timer_ = self.create_timer(0.2, self.tick)
-        self.get_logger().info(f'waypoint_sender: {len(self.waypoints_)} waypoints, hold={self.hold_time_}s')
-
-    def tick(self):
-        if self.idx_ >= len(self.waypoints_):
-            self.get_logger().info('all waypoints complete — holding last')
-            return
-        wp = self.waypoints_[self.idx_]
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'map'
-        msg.pose.position.x = float(wp[0])
-        msg.pose.position.y = float(wp[1])
-        msg.pose.position.z = float(wp[2])
-        self.pub_.publish(msg)
-        now = self.get_clock().now().nanoseconds * 1e-9
-        if self.at_wp_since_ is None:
-            self.at_wp_since_ = now
-            self.get_logger().info(f'-> waypoint {self.idx_+1}/{len(self.waypoints_)}: ({wp[0]:.1f},{wp[1]:.1f},{wp[2]:.1f})')
-        if now - self.at_wp_since_ >= self.hold_time_:
-            self.idx_ += 1
-            self.at_wp_since_ = None
-            if self.idx_ < len(self.waypoints_):
-                nw = self.waypoints_[self.idx_]
-                self.get_logger().info(f'advancing to wp {self.idx_+1}: ({nw[0]:.1f},{nw[1]:.1f},{nw[2]:.1f})')
+def parse_ros_args():
+    """简单解析 --ros-args -p key:=value 来提取 hold_time 和 waypoints"""
+    hold = 5.0
+    wps_str = DEFAULT_WAYPOINTS
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == '--ros-args':
+            i += 1
+            continue
+        if args[i] == '-p' and i + 1 < len(args):
+            kv = args[i + 1]
+            if 'hold_time:=' in kv:
+                hold = float(kv.split(':=')[1])
+            elif 'waypoints:=' in kv:
+                wps_str = kv.split(':=', 1)[1]
+            elif ':=' not in kv:
+                # 可能是 waypoints 直接写
+                if kv.startswith('[['):
+                    wps_str = kv
+            i += 2
+            continue
+        i += 1
+    return hold, json.loads(wps_str)
 
 def main():
-    rclpy.init()
-    rclpy.spin(WaypointSender())
-    rclpy.shutdown()
+    hold_time, waypoints = parse_ros_args()
+    print(f"waypoint_sender: {len(waypoints)} waypoints, hold={hold_time}s", flush=True)
+
+    for idx, wp in enumerate(waypoints):
+        x, y, z = float(wp[0]), float(wp[1]), float(wp[2])
+        print(f"-> waypoint {idx+1}/{len(waypoints)}: ({x:.1f}, {y:.1f}, {z:.1f})", flush=True)
+        # 在停留时间内持续发送，确保控制器收到
+        start = time.time()
+        while time.time() - start < hold_time:
+            pub_goal(x, y, z)
+            time.sleep(0.5)
+    print("all waypoints complete", flush=True)
 
 if __name__ == '__main__':
     main()
