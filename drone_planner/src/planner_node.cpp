@@ -121,8 +121,13 @@ class PlannerNode : public rclcpp::Node {
       }
     }
     if (obstacles.empty()) {
-      // no obstacles → direct line to goal (just publish goal as safe_goal)
-      publishStatus("OK");
+      // 还没收到障碍物 → 不要直冲目标，悬停当前位姿等待
+      if (!obs) {
+        publishStatus("WAITING_FOR_MAP");
+        publishSafeGoal(px, py, cruise_z_);  // hold position
+        return;
+      }
+      // 收到过 MarkerArray 但解析为空 → 真无障碍，可直飞
       publishSafeGoal(gx, gy, z_cruise);
       publishStatus("OK_NO_OBSTACLES");
       return;
@@ -133,6 +138,11 @@ class PlannerNode : public rclcpp::Node {
     auto grid = drone_planner::buildOccupancyGrid(
         obstacles, resolution_, bounds_[0], bounds_[1],
         bounds_[2], bounds_[3], inflate, z_cruise);
+    int occupied = 0;
+    for (auto v : grid.cells) if (v) ++occupied;
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+        "replan: %zu obstacles, grid %dx%d, %d occupied cells, z_cruise=%.2f",
+        obstacles.size(), grid.nx, grid.ny, occupied, z_cruise);
 
     // 检查 start/goal 是否在占用格内
     int six, siy, gix, giy;
@@ -148,8 +158,11 @@ class PlannerNode : public rclcpp::Node {
     auto path = drone_planner::astarSearch(grid, px, py, gx, gy);
     if (path.empty()) {
       publishStatus("NO_PATH");
-      return;  // keep last safe_goal
+      return;
     }
+
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+        "planned_path: %zu waypoints (smoothed)", path.size());
 
     // 发布计划路径
     publishPath(path, z_cruise);

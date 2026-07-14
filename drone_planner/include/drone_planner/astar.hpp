@@ -34,6 +34,24 @@ inline double heuristic(int x1, int y1, int x2, int y2) {
   return 1.0 * std::max(dx, dy) + (std::sqrt(2.0) - 1.0) * std::min(dx, dy);
 }
 
+// Bresenham 直线从 (x0,y0) 到 (x1,y1) 的各格子是否全是 free
+inline bool lineFree(const Grid2D& grid, int x0, int y0, int x1, int y1) {
+  int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+  int x = x0, y = y0;
+  while (true) {
+    if (x != x0 || y != y0) {  // 跳过起点本身
+      if (!grid.inBounds(x, y) || grid.at(x, y) != 0) return false;
+    }
+    if (x == x1 && y == y1) break;
+    int e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x += sx; }
+    if (e2 <= dx) { err += dx; y += sy; }
+  }
+  return true;
+}
+
 // 哈希：pair<int,int> → size_t
 struct PairHash {
   size_t operator()(const std::pair<int,int>& p) const {
@@ -128,19 +146,20 @@ inline std::vector<Eigen::Vector2d> astarSearch(
   }
   std::reverse(path.begin(), path.end());
 
-  // 共线点简化
+  // 碰撞感知平滑：只有直线段全程 free 时才跳掉中间点
   std::vector<Eigen::Vector2d> smooth;
   smooth.push_back(path.front());
   for (size_t i = 1; i + 1 < path.size(); ++i) {
     const auto& a = smooth.back();
-    const auto& b = path[i];
     const auto& c = path[i + 1];
-    // 检查 b 是否在 ac 线段上（容许一个格子宽度误差）
-    double cross = (b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x());
-    double dot = (b.x() - a.x()) * (c.x() - a.x()) + (b.y() - a.y()) * (c.y() - a.y());
-    double d_ac = (c - a).norm();
-    if (std::abs(cross) < 1e-6 && dot > 0 && dot < d_ac * d_ac + 0.1) continue;
-    smooth.push_back(b);
+    int ax, ay, cx, cy;
+    grid.worldToGrid(a.x(), a.y(), ax, ay);
+    grid.worldToGrid(c.x(), c.y(), cx, cy);
+    int bx, by;
+    grid.worldToGrid(path[i].x(), path[i].y(), bx, by);
+    // 如果 a→c 直线在栅格上无碰撞，跳过中间点 b
+    if (lineFree(grid, ax, ay, cx, cy)) continue;
+    smooth.push_back(path[i]);
   }
   smooth.push_back(path.back());
 
