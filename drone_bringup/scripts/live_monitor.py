@@ -8,7 +8,7 @@ Ctrl+C 停止 → 自动保存 dashboard_log.csv
 
 不需要 matplotlib, rclpy。全靠 ros2 topic echo subprocess + http.server。
 """
-import subprocess, threading, time, json, math, os, sys
+import subprocess, threading, time, json, math, os, sys, socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -30,7 +30,7 @@ SAVE_FILE = "dashboard_log.csv"
 odom_proc, rpm_proc, goal_proc, obs_proc = None, None, None, None
 
 def sh(cmd, timeout=5):
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(['/bin/bash','-c',cmd], capture_output=True, text=True, timeout=timeout)
 
 # ====== ROS 数据采集线程 ======
 def read_odom():
@@ -252,7 +252,13 @@ if __name__=='__main__':
     time.sleep(2)
 
     # HTTP server
-    server=HTTPServer(('0.0.0.0',8765),Handler)
+    import socketserver
+    class ReuseServer(HTTPServer):
+        allow_reuse_address = True
+        def server_bind(self):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            HTTPServer.server_bind(self)
+    server=ReuseServer(('0.0.0.0',8765),Handler)
     try: server.serve_forever()
     except KeyboardInterrupt:
         print("\nSaving CSV...")
