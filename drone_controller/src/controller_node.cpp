@@ -85,8 +85,8 @@ class ControllerNode : public rclcpp::Node {
     // LADRC 参数
     declare_parameter<std::string>("control_mode", "pd");
     declare_parameter<std::vector<double>>("ladrc_b0", {1.0, 1.0, 1.0});
-    declare_parameter<std::vector<double>>("ladrc_wc", {2.0, 2.0, 3.0});
-    declare_parameter<std::vector<double>>("ladrc_wo", {10.0, 10.0, 15.0});
+    declare_parameter<std::vector<double>>("ladrc_wc", {1.5, 1.5, 2.0});
+    declare_parameter<std::vector<double>>("ladrc_wo", {6.0, 6.0, 10.0});
     declare_parameter<double>("F_min", 0.0);
     declare_parameter<double>("F_max", 39.24);
     declare_parameter<double>("tau_max", 5.0);

@@ -16,11 +16,11 @@ drone_controller:
     d_far: 10.0
     Kp_att: [8.0, 8.0, 3.0]
     Kd_rate: [2.0, 2.0, 1.5]
-    # LADRC 参数（control_mode: "ladrc" 时生效）
-    control_mode: "pd"         # "pd" 或 "ladrc"
-    ladrc_b0: [1.0, 1.0, 1.0] # 各轴输入增益 b0 [x,y,z]（核心——系统惯性）
-    ladrc_wc: [2.0, 2.0, 3.0] # 控制器带宽 ωc [x,y,z]（响应速度）
-    ladrc_wo: [10.0, 10.0, 15.0] # 观测器带宽 ωo（3~5 倍 ωc）
+    # LADRC 参数（control_mode: "ladrc" 时生效，实验性功能）
+    control_mode: "pd"         # "pd"（推荐，稳定） | "ladrc"（实验性）
+    ladrc_b0: [1.0, 1.0, 1.0] # 各轴输入增益 b0 [x,y,z]
+    ladrc_wc: [1.5, 1.5, 2.0] # 控制器带宽（保守值，避免振荡）
+    ladrc_wo: [6.0, 6.0, 10.0] # 观测器带宽（4× wc）
     F_min: 0.0
     F_max: 39.24
     tau_max: 5.0
