@@ -1,0 +1,13 @@
+# planner.yaml — A* 2D 膨胀栅格参数
+drone_planner:
+  ros__parameters:
+    resolution: 0.1          # 栅格分辨率 m
+    bounds: [-3.0, 5.0, -3.0, 5.0]  # x0 x1 y0 y1
+    safety_distance: 0.4     # 障碍物最小距离 m
+    drone_radius: 0.2        # 无人机外接圆 m（膨胀 = safety + drone_radius）
+    use_goal_z: true
+    cruise_altitude: 1.5
+    replan_rate: 1.0         # Hz
+    lookahead: 0.5           # 前视距离 m
+    advance_tol: 0.3         # 到达容差 m
+    grid_frame: "map"

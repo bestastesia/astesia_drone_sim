@@ -17,7 +17,8 @@ find_package(visualization_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(drone_common REQUIRED)
 
-add_executable(planner_node src/placeholder_node.cpp)
+add_executable(planner_node src/planner_node.cpp)
+target_include_directories(planner_node PRIVATE include)
 target_link_libraries(planner_node drone_common::drone_common)
 ament_target_dependencies(planner_node
   rclcpp std_msgs geometry_msgs nav_msgs visualization_msgs
