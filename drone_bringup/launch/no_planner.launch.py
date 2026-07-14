@@ -26,6 +26,15 @@ def generate_launch_description():
             remappings=[('/drone/safe_goal', '/drone/goal')],
         ),
         Node(
+            package='drone_map',
+            executable='map_node',
+            name='drone_map',
+            output='screen',
+            parameters=[PathJoinSubstitution([
+                FindPackageShare('drone_map'), 'config', 'map.yaml'
+            ])],
+        ),
+        Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',
