@@ -145,17 +145,7 @@ class PlannerNode : public rclcpp::Node {
         "replan: %zu obstacles, grid %dx%d, %d occupied cells, z_cruise=%.2f",
         obstacles.size(), grid.nx, grid.ny, occupied, z_cruise);
 
-    // 检查 start/goal 是否在占用格内
-    int six, siy, gix, giy;
-    grid.worldToGrid(px, py, six, siy);
-    grid.worldToGrid(gx, gy, gix, giy);
-    if (grid.inBounds(gix, giy) && grid.at(gix, giy)) {
-      publishStatus("GOAL_IN_OBSTACLE");
-      publishSafeGoal(gx, gy, z_cruise);  // 给原目标，controller 会悬停
-      return;
-    }
-
-    // A*
+    // A*（astarSearch 内部已有 start/goal 的 BFS 就近 free cell 处理）
     auto path = drone_planner::astarSearch(grid, px, py, gx, gy);
     if (path.empty()) {
       publishStatus("NO_PATH");

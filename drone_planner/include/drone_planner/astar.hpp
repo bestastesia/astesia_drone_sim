@@ -72,7 +72,7 @@ inline std::vector<Eigen::Vector2d> astarSearch(
   if (grid.inBounds(sx, sy) && grid.at(sx, sy)) {
     // 简单 BFS 找最近 free
     bool found = false;
-    for (int r = 1; r < 20 && !found; ++r) {
+    for (int r = 1; r < 50 && !found; ++r) {
       for (int d = -r; d <= r && !found; ++d) {
         int cx = sx + d, cy = sy - r;
         if (grid.inBounds(cx, cy) && grid.at(cx, cy) == 0) { sx = cx; sy = cy; found = true; }
@@ -88,7 +88,7 @@ inline std::vector<Eigen::Vector2d> astarSearch(
   }
   if (grid.inBounds(gx, gy) && grid.at(gx, gy)) {
     bool found = false;
-    for (int r = 1; r < 20 && !found; ++r) {
+    for (int r = 1; r < 50 && !found; ++r) {
       for (int d = -r; d <= r && !found; ++d) {
         int cx = gx + d, cy = gy - r;
         if (grid.inBounds(cx, cy) && grid.at(cx, cy) == 0) { gx = cx; gy = cy; found = true; }
