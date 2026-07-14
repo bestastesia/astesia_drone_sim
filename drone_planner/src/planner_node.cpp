@@ -167,29 +167,27 @@ class PlannerNode : public rclcpp::Node {
     // 发布计划路径
     publishPath(path, z_cruise);
 
-    // track path index — 找到离当前位置最近的前方 waypoint
-    // 先钳住：跨 replan 时新路径可能比旧路径短，path_idx_ 会越界
-    if (path_idx_ >= static_cast<int>(path.size()))
-      path_idx_ = 0;
-    double best_dist = 1e9; int best_i = path_idx_;
-    for (int i = path_idx_; i < static_cast<int>(path.size()); ++i) {
+    // 找到当前位置在整条路径上最近的航点（从头搜，不依赖跨 replan 的旧 index）
+    double best_dist = 1e9; int closest_i = 0;
+    for (int i = 0; i < static_cast<int>(path.size()); ++i) {
       double d = std::hypot(path[i].x() - px, path[i].y() - py);
-      if (d < best_dist) { best_dist = d; best_i = i; }
-    }
-    path_idx_ = best_i;
-
-    // safe_goal = 路径上紧接的下一个航点（不跳点，避免累积 lookahead 跳过中间点）
-    int look_i = std::min(path_idx_ + 1, static_cast<int>(path.size()) - 1);
-    publishSafeGoal(path[look_i].x(), path[look_i].y(), z_cruise);
-
-    // 如果当前位置距当前 waypoint 足够近，推进 index
-    if (path_idx_ < static_cast<int>(path.size())) {
-      double d = std::hypot(path[path_idx_].x() - px, path[path_idx_].y() - py);
-      if (d < advance_tol_ && path_idx_ + 1 < static_cast<int>(path.size()))
-        ++path_idx_;
+      if (d < best_dist) { best_dist = d; closest_i = i; }
     }
 
-    publishStatus("OK");
+    // 单调推进：safe_goal 永远取 closest+1，但引入 last_look_i 保证不回退
+    int candidate = std::min(closest_i + 1, static_cast<int>(path.size()) - 1);
+    if (candidate > last_look_i_) last_look_i_ = candidate;
+    else if (closest_i >= static_cast<int>(path.size()) - 1)
+      last_look_i_ = static_cast<int>(path.size()) - 1;  // at goal, stay
+
+    publishSafeGoal(path[last_look_i_].x(), path[last_look_i_].y(), z_cruise);
+
+    // 到达最终目标后不再更新
+    if (last_look_i_ < static_cast<int>(path.size()) - 1) {
+      publishStatus("OK");
+    } else {
+      publishStatus("AT_GOAL");
+    }
   }
 
   void publishStatus(const std::string& s) {
@@ -224,7 +222,7 @@ class PlannerNode : public rclcpp::Node {
   std::vector<double> bounds_;
   std::string grid_frame_;
 
-  int path_idx_ = 0;
+  int last_look_i_ = 0;
 
   std::mutex mtx_;
   nav_msgs::msg::Odometry::SharedPtr last_odom_;

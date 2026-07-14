@@ -1,4 +1,21 @@
-# drone_controller 默认参数 (SI)
+# controller.yaml — PD 参数
+# ===========================================================================
+# 理论推导（串级系统极点配置）
+#
+# 内环（姿态）：I·s² + Kd_rate·s + Kp_att = 0
+#   ω_n_att = sqrt(Kp_att/I)
+#   ζ_att   = Kd_rate / (2·sqrt(Kp_att·I))
+#   roll/pitch: I=0.02, Kp_att=8 → ω_n=20 rad/s
+#   Kd_rate=0.8 → ζ=1（临界阻尼，时间常数 0.05s）
+#   yaw: I=0.04, Kp_att=3 → ω_n=8.7 rad/s, Kd_rate=0.7 → ζ=1
+#
+# 外环（位置）：内环近似一阶，ω_att/3 ≈ 6.7 rad/s 可用带宽
+#   但实际瓶颈是加速度限幅 a_max：
+#     Kp_max = a_max / 飞行距离
+#     Kp_xy ≤ 4/2 = 2.0    (a_xy_max=4, 覆盖 2m)
+#     Kp_z  ≤ 6/2 = 3.0    (a_z_max=6,  覆盖 2m)
+#     Kd = 2ζ·sqrt(Kp)     (ζ ≈ 0.7 用于位置环)
+# ===========================================================================
 drone_controller:
   ros__parameters:
     mass: 1.0
