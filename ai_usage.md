@@ -45,3 +45,38 @@
 ## 更新历史
 - Step 0：占位骨架 + git（内容见 commit 6bf683b、5e36c28）
 - Step 1：drone_common mixer/frames/math/obstacle + gtest 7 通过
+- Step 2：drone_dynamics EOM + motor + odom/imu/path/tf（commit 870a8f5）
+- Step 3：drone_controller cascaded PD + bringup(no_planner) 悬停（commit f8cfb2e）
+- Step 4：go-to-goal + waypoint_sender 正方形航线（commit 9ac6eff）
+- Step 5：drone_map 确定性障碍物 + MarkerArray（commit aa6d159）
+- Step 6：drone_planner A* 膨胀栅格 + full.launch（commit aeac6ba）
+- Step 7：plot_bag + report + ai_usage 收尾
+
+## 7. Steps 2-6 新增经验
+
+### AI 完成的模块（续）
+- drone_dynamics 全部（dynamics.hpp, dynamics_node.cpp, dynamics.yaml）
+- drone_controller 全部（controller.hpp, controller_node.cpp, controller.yaml, LADRC 实验）
+- drone_map 全部（map_node.cpp, map.yaml）
+- drone_planner 全部（grid.hpp, astar.hpp, planner_node.cpp, planner.yaml）
+- launch 文件（no_planner.launch.py, full.launch.py）
+- 辅助脚本（waypoint_sender.py, ladrc_autotune.py, plot_bag.py）
+
+### 关键 prompt（续）
+10. 「动力学离线自检：零推力自由落体、hover 保持、roll 符号」——确认 EOM/mixer/积分正确
+11. 「单线程下 1kHz timer 饿死 RPM 订阅回调」→ 改为 MT executor + 独立 callback group
+12. 「路径平滑共线简化穿过了球体」→ Brsenham lineFree 碰撞检查
+13. 「YAML 的 string_array 参数在 launch 里不加载」→ PathJoinSubstitution→get_package_share_directory
+14. 「跨 replan 的 path_idx_ 越界导致跳过航点」→ clamp path_idx_ 到新路径 bounds
+
+### 自己确认/修改（续）
+- **Roll 符号物理校验**：自己推了一遍 mixer τx 行的叉乘，确认「+roll→左电机快」物理正确
+- **防炸机制**：要求加 assert(k_F>0) 参数校验 + cwiseMax(0) 非负 clamp + NDEBUG 陷阱记录
+- **碰撞感知平滑**：要求 Bresenham 线检查而非仅几何共线判定
+- **障碍物布局**：自己设计 6 个障碍物位置，确保目标点 free 但直线全 blocked
+- **PD 调参**：自己调整 Kp/Kd 到 ζ≈0.7，后续又尝试过阻尼 (ζ≈1.1)
+
+### 新增错误及修正（续）
+- **1kHz timer 饿死订阅**：单线程 spin 下 1kHz wall_timer 占满 CPU，RPM 回调永远不触发。→ MT executor(2)+独立 MutuallyExclusive callback group。**这是我以前不知道的 ROS2 坑。**
+- **ros2 topic echo --once 耗 1.5s**：每采一个数据点都重新启动 ros2 CLI。→ 改用 subprocess.Popen 后台管道持续读取
+- **LADRC 三轴独立模型发散**：解耦 LADRC 不捕捉姿态内环 + 推力矢量耦合。→ PD 保持默认，LADRC 降为实验性 bonus（commit 12c2417）
