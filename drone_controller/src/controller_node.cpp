@@ -71,8 +71,8 @@ class ControllerNode : public rclcpp::Node {
     declare_parameter<double>("arm_length", 0.2);
     declare_parameter<double>("k_F", 1.0);
     declare_parameter<double>("k_M", 0.05);
-    declare_parameter<std::vector<double>>("Kp_pos", {2.5, 2.5, 4.0});
-    declare_parameter<std::vector<double>>("Kd_pos", {2.2, 2.2, 2.8});
+    declare_parameter<std::vector<double>>("Kp_pos", {2.0, 2.0, 3.0});
+    declare_parameter<std::vector<double>>("Kd_pos", {2.0, 2.0, 2.4});
     declare_parameter<std::vector<double>>("Ki_pos", {0.0, 0.0, 0.0});
     declare_parameter<double>("Ki_max", 1.0);
     declare_parameter<double>("a_xy_max", 4.0);
@@ -81,7 +81,7 @@ class ControllerNode : public rclcpp::Node {
     declare_parameter<double>("a_max_vec", 8.0);
     declare_parameter<double>("d_far", 10.0);
     declare_parameter<std::vector<double>>("Kp_att", {8.0, 8.0, 3.0});
-    declare_parameter<std::vector<double>>("Kd_rate", {2.0, 2.0, 1.5});
+    declare_parameter<std::vector<double>>("Kd_rate", {0.8, 0.8, 0.7});
     // LADRC 参数
     declare_parameter<std::string>("control_mode", "pd");
     declare_parameter<std::vector<double>>("ladrc_b0", {1.0, 1.0, 1.0});

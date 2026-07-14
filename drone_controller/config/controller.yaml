@@ -5,8 +5,8 @@ drone_controller:
     arm_length: 0.2
     k_F: 1.0
     k_M: 0.05
-    Kp_pos: [25, 25, 4.0]
-    Kd_pos: [2.2, 2.2, 2.8]
+    Kp_pos: [2.0, 2.0, 3.0]
+    Kd_pos: [2.0, 2.0, 2.4]
     Ki_pos: [0.0, 0.0, 0.0]
     Ki_max: 1.0
     a_xy_max: 4.0
@@ -15,7 +15,7 @@ drone_controller:
     a_max_vec: 8.0
     d_far: 10.0
     Kp_att: [8.0, 8.0, 3.0]
-    Kd_rate: [2.0, 2.0, 1.5]
+    Kd_rate: [0.8, 0.8, 0.7]
     # LADRC 参数（control_mode: "ladrc" 时生效，实验性功能）
     control_mode: "pd"         # "pd"（推荐，稳定） | "ladrc"（实验性）
     ladrc_b0: [1.0, 1.0, 1.0] # 各轴输入增益 b0 [x,y,z]
