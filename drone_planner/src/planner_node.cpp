@@ -175,16 +175,8 @@ class PlannerNode : public rclcpp::Node {
     }
     path_idx_ = best_i;
 
-    // 沿路径推进 lookahead 距离
-    double accumulated = 0;
-    int look_i = path_idx_;
-    for (int i = path_idx_; i + 1 < static_cast<int>(path.size()); ++i) {
-      double seg = (path[i + 1] - path[i]).norm();
-      accumulated += seg;
-      look_i = i + 1;
-      if (accumulated >= lookahead_) break;
-    }
-    look_i = std::min(look_i, static_cast<int>(path.size()) - 1);
+    // safe_goal = 路径上紧接的下一个航点（不跳点，避免累积 lookahead 跳过中间点）
+    int look_i = std::min(path_idx_ + 1, static_cast<int>(path.size()) - 1);
     publishSafeGoal(path[look_i].x(), path[look_i].y(), z_cruise);
 
     // 如果当前位置距当前 waypoint 足够近，推进 index
