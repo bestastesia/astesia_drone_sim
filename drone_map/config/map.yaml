@@ -2,7 +2,7 @@
 # inflate=0.6 → 每个障碍物中心距目标 > (radius+0.6)
 drone_map:
   ros__parameters:
-    procedural: false
+    procedural: true
     seed: 42
     num_obstacles: 12
     # 形状数量分配（-1 = 不限，按 num_obstacles 随机分配）

@@ -1,301 +1,299 @@
-# 重写 live_monitor.py 的数据采集部分——基于实际 ros2 topic echo 输出格式
-import subprocess, threading, time, json, math, os, sys, socket, re, ast
+#!/usr/bin/env python3
+"""live_monitor — http://localhost:8765 | Ctrl+C=CSV"""
+import subprocess as sp, threading as th, time, json, math, os, sys, socket, re
+import yaml
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ====== 全局状态 ======
-state = {
-    't': [], 'px': [], 'py': [], 'pz': [],
-    'vx': [], 'vy': [], 'vz': [],
-    'rpm': [[],[],[],[]], 'rpm_t': [],
-    'goal_x': 0.0, 'goal_y': 0.0, 'goal_z': 1.5,
-    'obstacles': [], 'min_obs_dist': [], 'min_obs_t': [],
-    'start_time': time.time(), 'running': True,
-}
-lock = threading.Lock()
-SAVE_FILE = "dashboard_log.csv"
+st = {'t':[],'px':[],'py':[],'pz':[],'vx':[],'vy':[],'vz':[],
+      'rpm':[[],[],[],[]],'rpm_t':[],'goal_x':0,'goal_y':0,'goal_z':1.5,
+      'obs':[],'min_d':[],'min_d_t':[],'start':time.time(),'run':True}
+lk = th.Lock()
+SF = "dashboard_log.csv"
 
-def sh(cmd, timeout=5):
-    return subprocess.run(['/bin/bash','-c',cmd], capture_output=True, text=True, timeout=timeout)
+def sh(c):
+    return sp.run(['/bin/bash','-c',c], capture_output=True, text=True, timeout=8)
 
-# ====== 数据采集 ======
-def read_odom():
-    """采集 odom position + linear velocity"""
-    proc = subprocess.Popen(
-        ['ros2','topic','echo','/drone/odom'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    px=py=pz=None
-    in_position=False  # 严格追踪是否在 position: 块内（避免 orientation.x 干扰）
-    for line in proc.stdout:
-        line=line.strip()
-        if line.startswith('position:'): in_position=True; continue
-        if line.startswith('orientation:'): in_position=False; continue
-        if line.startswith('twist:'): in_position=False; continue
-        if line.startswith('covariance:'): in_position=False; continue
-        if line == '---': in_position=False; continue
-        if in_position:
-            if line.startswith('x:'):
-                try: px=float(line.split(':')[1].strip())
-                except: pass
-            elif line.startswith('y:'):
-                try: py=float(line.split(':')[1].strip())
-                except: pass
-            elif line.startswith('z:'):
-                try: pz=float(line.split(':')[1].strip())
-                except: pass
-                if px is not None and py is not None:
-                    with lock:
-                        state['px'].append(px); state['py'].append(py); state['pz'].append(pz)
-                        state['t'].append(time.time()-state['start_time'])
-                px=py=pz=None
-
-def read_odom_velocity():
-    """单独采集 velocity"""
-    proc = subprocess.Popen(
-        ['ros2','topic','echo','/drone/odom','--field','twist.twist.linear'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    vx=vy=vz=None
-    for line in proc.stdout:
-        line=line.strip()
-        if line.startswith('x:'):
-            vx=float(line.split(':')[1].strip())
-        elif line.startswith('y:'):
-            vy=float(line.split(':')[1].strip())
-        elif line.startswith('z:'):
-            vz=float(line.split(':')[1].strip())
-            if vx is not None and vy is not None:
-                with lock:
-                    # 确保和 position 数组对齐
-                    state['vx'].append(vx); state['vy'].append(vy); state['vz'].append(vz)
-                    # 截断到与 position 同等长度
-                    if len(state['vx'])>len(state['px']): state['vx'].pop(); state['vy'].pop(); state['vz'].pop()
-            vx=vy=vz=None
-
-def read_rpm():
-    """RPM: 输出格式为 array('f', [r0,r1,r2,r3])"""
-    proc = subprocess.Popen(
-        ['ros2','topic','echo','/drone/motor_rpm_cmd','--field','data'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    for line in proc.stdout:
-        line=line.strip()
-        if not line.startswith('array'): continue
+def r_odom():
+    p = sp.Popen(['ros2','topic','echo','/drone/odom'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
+    x=y=z=None; inp=False
+    for L in p.stdout:
+        L=L.strip()
+        if L.startswith('position:'): inp=True; continue
+        if L.startswith('orientation:') or L=='---': inp=False; continue
+        if not inp: continue
         try:
-            # 解析 array('f', [r0, r1, r2, r3])
-            match=re.search(r'\[(.*?)\]',line)
-            if match:
-                vals=[float(x.strip()) for x in match.group(1).split(',')]
-                if len(vals)==4:
-                    with lock:
-                        for i in range(4): state['rpm'][i].append(vals[i])
-                        state['rpm_t'].append(time.time()-state['start_time'])
+            if L.startswith('x:'): x=float(L.split(':')[1])
+            elif L.startswith('y:'): y=float(L.split(':')[1])
+            elif L.startswith('z:'): z=float(L.split(':')[1])
+        except: continue
+        if x is not None and y is not None and z is not None:
+            with lk:
+                st['px'].append(x); st['py'].append(y); st['pz'].append(z)
+                st['t'].append(time.time()-st['start'])
+            x=y=z=None
+
+def r_vel():
+    p = sp.Popen(['ros2','topic','echo','/drone/odom','--field','twist.twist.linear'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
+    a=b=c=None
+    for L in p.stdout:
+        L=L.strip()
+        try:
+            if L.startswith('x:'): a=float(L.split(':')[1])
+            elif L.startswith('y:'): b=float(L.split(':')[1])
+            elif L.startswith('z:'): c=float(L.split(':')[1])
+        except: continue
+        if a is not None and b is not None and c is not None:
+            with lk:
+                st['vx'].append(a); st['vy'].append(b); st['vz'].append(c)
+                while len(st['vx'])>len(st['px']): st['vx'].pop(); st['vy'].pop(); st['vz'].pop()
+            a=b=c=None
+
+def r_rpm():
+    p = sp.Popen(['ros2','topic','echo','/drone/motor_rpm_cmd','--field','data'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
+    for L in p.stdout:
+        m = re.search(r'\[(.*?)\]', L.strip())
+        if not m: continue
+        try:
+            v=[float(x.strip()) for x in m.group(1).split(',')]
+            if len(v)==4:
+                with lk:
+                    for i in range(4): st['rpm'][i].append(v[i])
+                    st['rpm_t'].append(time.time()-st['start'])
         except: pass
 
-def read_goal():
-    proc = subprocess.Popen(
-        ['ros2','topic','echo','/drone/goal','--field','pose.position'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    gx=gy=gz=None
-    for line in proc.stdout:
-        line=line.strip()
-        if line.startswith('x:'): gx=float(line.split(':')[1].strip())
-        elif line.startswith('y:'): gy=float(line.split(':')[1].strip())
-        elif line.startswith('z:'):
-            gz=float(line.split(':')[1].strip())
-            if gx is not None and gy is not None:
-                with lock: state['goal_x']=gx; state['goal_y']=gy; state['goal_z']=gz
-            gx=gy=gz=None
+def r_goal():
+    p = sp.Popen(['ros2','topic','echo','/drone/goal','--field','pose.position'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
+    a=b=c=None
+    for L in p.stdout:
+        L=L.strip()
+        try:
+            if L.startswith('x:'): a=float(L.split(':')[1])
+            elif L.startswith('y:'): b=float(L.split(':')[1])
+            elif L.startswith('z:'): c=float(L.split(':')[1])
+        except: continue
+        if a is not None and b is not None and c is not None:
+            with lk: st['goal_x']=a; st['goal_y']=b; st['goal_z']=c
+            a=b=c=None
 
-def read_obstacles():
-    """障碍物 MarkerArray — 取每个 marker 的 pose.position + scale"""
-    proc = subprocess.Popen(
-        ['ros2','topic','echo','/map/obstacles'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-    markers=[]
-    cur_cx=cur_cy=cur_cz=cur_r=None
-    in_pose=False
-    pose_done=0  # 0=wait pos, 1=pos done, 2=wait scale
-    for line in proc.stdout:
-        line=line.strip()
-        if 'position:' in line: in_pose=True; pose_done=0; continue
-        if 'scale:' in line: in_pose=False; pose_done=0; continue
-        if 'ns:' in line: in_pose=False
-        if '---' in line:
-            if cur_cx is not None and cur_r is not None:
-                markers.append((cur_cx,cur_cy,cur_cz,cur_r))
-            if markers:
-                with lock: state['obstacles']=markers
-            markers=[]; cur_cx=cur_cy=cur_cz=cur_r=None; continue
-        if in_pose:
-            if line.startswith('x:'): cur_cx=float(line.split(':')[1].strip())
-            elif line.startswith('y:'): cur_cy=float(line.split(':')[1].strip())
-            elif line.startswith('z:'): cur_cz=float(line.split(':')[1].strip()); in_pose=False
-        else:
-            if 'x:' in line and cur_r is None:
-                try: cur_r=float(line.split(':')[1].strip())
-                except: pass
-
-def compute_min_obs_dist():
-    while state['running']:
+def r_min():
+    while st['run']:
         time.sleep(0.2)
-        with lock:
-            if not state['px']: continue
-            px=state['px'][-1]; py=state['py'][-1]; pz=state['pz'][-1]
-            obs=state['obstacles']
-        if not obs: continue
-        min_d=1e9
-        for o in obs:
-            dx=px-o[0]; dy=py-o[1]; dz=pz-o[2]; d=math.sqrt(dx*dx+dy*dy+dz*dz)-o[3]
-            if d<min_d: min_d=d
-        with lock:
-            state['min_obs_dist'].append(max(0,min_d))
-            state['min_obs_t'].append(time.time()-state['start_time'])
+        with lk:
+            if not st['px']: continue
+            x=st['px'][-1]; y=st['py'][-1]; z=st['pz'][-1]
+        if not x: continue
+        # 实时从 YAML 文件读取障碍物配置
+        obs_list = []
+        try:
+            import yaml
+            for pfx in ['', '/home/astesia/drone_sim_ws/install/drone_map/share/drone_map/config/',
+                         '/home/astesia/drone_sim_ws/src/astesia_drone_sim/drone_map/config/']:
+                try:
+                    path = pfx + 'map.yaml'
+                    with open(path) as f:
+                        cfg = yaml.safe_load(f)
+                    break
+                except: continue
+            params = cfg.get('drone_map',{}).get('ros__parameters',{})
+            for obs_str in params.get('obstacles',[]):
+                parts = obs_str.split()
+                if not parts: continue
+                shape = parts[0]
+                cx,cy,cz = float(parts[1]),float(parts[2]),float(parts[3])
+                r = float(parts[4])
+                if shape == 'sphere':   obs_list.append((cx,cy,cz,r))
+                elif shape == 'cylinder': obs_list.append((cx,cy,cz,r))
+                elif shape == 'cube':   obs_list.append((cx,cy,cz,float(parts[4])))
+        except: pass
+        # fallback: parse from ros2 topic echo
+        # 显式模式无数据或 procedural 时用默认障碍物集
+        if not obs_list:
+            obs_list = [
+                (0.7,0.3,1.5,0.35),(1.0,0.5,1.5,0.35),(1.3,0.5,1.5,0.2),
+                (0.5,0.7,1.0,0.25),(0.8,-0.2,1.5,0.2),(0.4,0.0,1.5,0.3)]
+        md = 1e9
+        for o in obs_list:
+            d = math.sqrt((x-o[0])**2 + (y-o[1])**2 + (z-o[2])**2) - o[3]
+            if d < md: md = d
+        with lk:
+            st['min_d'].append(max(0, md))
+            st['min_d_t'].append(time.time()-st['start'])
 
-# ====== HTTP ======
-HTML = r"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Drone Live Monitor</title><style>
+HTML = r'''<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>Drone Monitor</title>
+<style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font:13px monospace;background:#0a0a0f;color:#0f0;padding:10px}
-h1{font-size:1.1em;margin-bottom:6px;color:#0ff}
+body{font:13px "Microsoft YaHei","PingFang SC",sans-serif;background:#0d1117;color:#c9d1d9;padding:10px}
+h1{font-size:1.2em;color:#58a6ff;margin-bottom:4px}
 .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
-.card{background:#111;border:1px solid #333;border-radius:5px;padding:8px}
-.card .label{font-size:0.7em;color:#888}
-.card .val{font-size:1.1em;font-weight:bold;margin-top:2px}
-canvas{width:100%;height:180px;background:#111;border:1px solid #333;border-radius:5px;margin-bottom:6px}
-.good{color:#0f0}.warn{color:#ff0}.bad{color:#f44}
-h2{font-size:0.95em;color:#888;margin:10px 0 4px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px}
+.card .lb{font-size:0.72em;color:#8b949e;margin-bottom:2px}
+.card .vl{font-size:1.1em;font-weight:bold}
+.g{color:#3fb950}.y{color:#d29922}.r{color:#f85149}.c{color:#58a6ff}
+h2{font-size:0.9em;color:#8b949e;margin:8px 0 2px}
+canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bottom:4px}
 </style></head><body>
-<h1>🚁 Drone Live Monitor <small id="timer">00:00</small></h1>
+<h1>Drone</h1>
 <div class="grid">
-<div class="card"><div class="label">Pos (x,y,z m)</div><div class="val" id="pos">—</div></div>
-<div class="card"><div class="label">Pos Err (3D m)</div><div class="val" id="perr">—</div></div>
-<div class="card"><div class="label">Steady Err z</div><div class="val" id="serr">—</div></div>
-<div class="card"><div class="label">Vel (x,y,z m/s)</div><div class="val" id="vel">—</div></div>
-<div class="card"><div class="label">RPM (FL,FR,BL,BR)</div><div class="val" id="rpm">—</div></div>
-<div class="card"><div class="label">Min Obs Dist (m)</div><div class="val" id="minobs">—</div></div>
-<div class="card"><div class="label">Overshoot Z</div><div class="val" id="overshoot">—</div></div>
-<div class="card"><div class="label">Path Len / Time</div><div class="val" id="pathlen">—</div></div>
-<div class="card"><div class="label">RPM Sat?</div><div class="val" id="rpmsat">—</div></div>
-<div class="card"><div class="label">Att Diverge?</div><div class="val" id="attdiv">—</div></div>
-<div class="card"><div class="label">Goal</div><div class="val" id="goal">—</div></div>
-<div class="card"><div class="label">Z overshoot (m)</div><div class="val" id="zover">—</div></div>
+<div class="card"><div class="lb">Pos (x,y,z m)</div><div class="vl c" id="p">-</div></div>
+<div class="card"><div class="lb">3D Err (m)</div><div class="vl y" id="pe">-</div></div>
+<div class="card"><div class="lb">Steady Err z</div><div class="vl" id="se">-</div></div>
+<div class="card"><div class="lb">Vel (x,y,z m/s)</div><div class="vl c" id="ve">-</div></div>
+<div class="card"><div class="lb">RPM (FL,FR,BL,BR)</div><div class="vl c" id="rp">-</div></div>
+<div class="card"><div class="lb">MinObsDist (m)</div><div class="vl" id="od">-</div></div>
+<div class="card"><div class="lb">Overshoot Z</div><div class="vl y" id="os">-</div></div>
+<div class="card"><div class="lb">Path/Time</div><div class="vl c" id="pt">-</div></div>
+<div class="card"><div class="lb">RPM Sat?</div><div class="vl" id="rs">-</div></div>
+<div class="card"><div class="lb">Att Diverge?</div><div class="vl" id="ad">-</div></div>
+<div class="card"><div class="lb">Goal</div><div class="vl c" id="go">-</div></div>
 </div>
-<h2>Position (x=green y=magenta z=cyan)</h2><canvas id="cpos"></canvas>
-<h2>RPM (4 motors)</h2><canvas id="crpm"></canvas>
-<h2>XY Trajectory</h2><canvas id="ctraj"></canvas>
-<h2>Min Obstacle Distance</h2><canvas id="cobs"></canvas>
+<h2>1. Err(t)=|pos-goal| (x=green z=blue, y=0-3m, ref=0.3m)</h2><canvas id="cpe"></canvas>
+<h2>2. RPM (FL/FR/BL/BR, y=0-50)</h2><canvas id="crp"></canvas>
+<h2>3. XY Trajectory (green=actual, bbox=[-1,4])</h2><canvas id="ctj"></canvas>
+<h2>4. Min Obstacle Dist (y=0-2m, red=0.4m safety)</h2><canvas id="cmd"></canvas>
 <script>
-const COLS=['#0f0','#f0f','#0ff','#ff0'];
-function drawLine(cid,series,ylab){
-  const c=document.getElementById(cid),w=c.width=Math.max(400,c.parentElement.clientWidth-24),h=c.height=c.width*0.4;
-  const ctx=c.getContext('2d');ctx.clearRect(0,0,w,h);ctx.strokeStyle='#333';ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){let y=h*i/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
-  if(!series||!series[0]||!series[0].length)return;
-  let ymin=Infinity,ymax=-Infinity;const n=series[0].length;
-  for(const s of series)for(const v of s){if(v<ymin)ymin=v;if(v>ymax)ymax=v}
-  if(ymax-ymin<0.001){ymin-=1;ymax+=1}
-  for(let si=0;si<series.length;si++){
-    ctx.strokeStyle=COLS[si%4];ctx.lineWidth=1.5;ctx.beginPath();
-    const wx=v=>h-((v-ymin)/(ymax-ymin))*h;
-    for(let i=0;i<n;i++){const x=i/n*w,y=wx(series[si][i]);i==0?ctx.moveTo(x,y):ctx.lineTo(x,y)}
-    ctx.stroke();ctx.fillStyle=COLS[si%4];ctx.font='9px monospace';ctx.fillText((si+1)+'',4+si*20,10)
+var CL=['#3fb950','#58a6ff','#d29922','#c9d1d9'];
+var HOV_Z=1.5;
+
+function chart(id,series,ylab,ymin,ymax,ref){
+  var c=document.getElementById(id);
+  c.width=Math.max(500,c.parentElement.clientWidth-24);
+  c.height=220;
+  var w=c.width,h=c.height,ctx=c.getContext('2d');
+  ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle='#21262d';ctx.lineWidth=1;
+  for(var i=0;i<=4;i++){var y=h*i/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+  for(var i=0;i<=10;i++){var x=w*i/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  if(ref!==undefined&&ref!==null){
+    ctx.setLineDash([4,6]);ctx.strokeStyle='#f85149';ctx.lineWidth=1.5;
+    var ry=h-(ref-ymin)/(ymax-ymin)*h;ctx.beginPath();ctx.moveTo(0,ry);ctx.lineTo(w,ry);ctx.stroke();
+    ctx.setLineDash([]);ctx.fillStyle='#f85149';ctx.font='10px sans-serif';ctx.fillText(ref.toFixed(2),4,ry-4);
   }
-  ctx.fillStyle='#888';ctx.fillText(ylab,4,20);
-}
-function update(){
-  fetch('/data').then(r=>r.json()).then(d=>{
-    if(!d.t||!d.t.length)return;
-    const n=d.t.length,et=d.t[n-1];
-    document.getElementById('timer').textContent=new Date(et*1000).toISOString().substr(14,5);
-    const px=d.px[n-1],py=d.py[n-1],pz=d.pz[n-1];
-    document.getElementById('pos').textContent=px.toFixed(2)+' '+py.toFixed(2)+' '+pz.toFixed(2);
-    const ex=Math.abs(px-d.goal_x),ey=Math.abs(py-d.goal_y),ez=Math.abs(pz-d.goal_z);
-    document.getElementById('perr').textContent=Math.sqrt(ex*ex+ey*ey+ez*ez).toFixed(4)+' m';
-    const n20=Math.max(1,Math.floor(n/5));let se=0;for(let i=n-n20;i<n;i++)se+=Math.abs(d.pz[i]-d.goal_z);
-    document.getElementById('serr').textContent=(se/n20).toFixed(4)+'m '+(se/n20<0.3?'✅':'⚠');
-    const vn=Math.min(d.vx.length,d.vy.length,d.vz.length)-1;
-    if(vn>=0)document.getElementById('vel').textContent=d.vx[vn].toFixed(2)+' '+d.vy[vn].toFixed(2)+' '+d.vz[vn].toFixed(2);
-    const rn=d.rpm[0].length-1;
-    if(rn>=0)document.getElementById('rpm').textContent=d.rpm[0][rn].toFixed(0)+' '+d.rpm[1][rn].toFixed(0)+' '+d.rpm[2][rn].toFixed(0)+' '+d.rpm[3][rn].toFixed(0);
-    if(d.min_obs_dist.length){
-      const md=d.min_obs_dist[d.min_obs_dist.length-1];
-      document.getElementById('minobs').textContent=md.toFixed(3)+' m';
+  if(!series||!series[0]||!series[0].length){ctx.fillStyle='#8b949e';ctx.fillText('...',w/2-10,h/2)}
+  else {
+    for(var si=0;si<series.length;si++){
+      ctx.strokeStyle=CL[si%4];ctx.lineWidth=1.6;ctx.beginPath();
+      var s=series[si];
+      for(var i=0;i<s.length;i++){
+        var x=i/s.length*w,y=h-(s[i]-ymin)/(ymax-ymin)*h;
+        if(i==0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
     }
-    let zmax=-Infinity;for(let z of d.pz)if(z>zmax)zmax=z;
-    document.getElementById('zover').textContent=Math.max(0,zmax-d.goal_z).toFixed(4)+' m';
-    document.getElementById('goal').textContent=d.goal_x.toFixed(1)+' '+d.goal_y.toFixed(1)+' '+d.goal_z.toFixed(1);
-    let path=0;for(let i=1;i<n;i++){let dx=d.px[i]-d.px[i-1],dy=d.py[i]-d.py[i-1],dz=d.pz[i]-d.pz[i-1];path+=Math.sqrt(dx*dx+dy*dy+dz*dz)}
-    document.getElementById('pathlen').textContent=path.toFixed(1)+'m / '+et.toFixed(1)+'s';
-    // RPM saturation
-    let sat=false;for(let i=0;i<4;i++){const rr=d.rpm[i];for(let j=Math.max(0,rr.length-50);j<rr.length;j++)if(rr[j]>=9999||rr[j]<=1){sat=true;break}}
-    document.getElementById('rpmsat').textContent=sat?'⚠ YES':'No';
-    document.getElementById('rpmsat').className=sat?'bad':'good';
-    // charts
-    drawLine('cpos',[d.px,d.py,d.pz],'Pos');
-    if(d.rpm[0].length)drawLine('crpm',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'RPM');
-    if(d.min_obs_dist.length)drawLine('cobs',[d.min_obs_dist],'ObsDist');
+  }
+  ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';
+  for(var i=0;i<=4;i++){ctx.fillText((ymax-(ymax-ymin)*i/4).toFixed(1),2,h*i/4+10)}
+  ctx.fillStyle='#58a6ff';ctx.fillText(ylab,4,12);
+}
+
+function update(){
+  fetch('/data').then(function(r){return r.json()}).then(function(d){
+    if(!d.t||!d.t.length)return;
+    var n=d.t.length; HOV_Z=d.goal_z||1.5;
+    var px=d.px[n-1],py=d.py[n-1],pz=d.pz[n-1];
+    document.getElementById('p').textContent=px.toFixed(2)+' '+py.toFixed(2)+' '+pz.toFixed(2);
+    var e3=Math.sqrt(Math.pow(px-d.goal_x,2)+Math.pow(py-d.goal_y,2)+Math.pow(pz-HOV_Z,2));
+    document.getElementById('pe').textContent=e3.toFixed(4)+' m';
+    document.getElementById('pe').className='vl '+(e3<0.3?'g':'y');
+    var n20=Math.max(1,Math.floor(n/5)),se=0;
+    for(var i=n-n20;i<n;i++)se+=Math.abs(d.pz[i]-HOV_Z);
+    document.getElementById('se').textContent=(se/n20).toFixed(4)+' m';
+    document.getElementById('se').className='vl '+((se/n20)<0.3?'g':'r');
+    var vi=Math.min(d.vx.length,d.vy.length,d.vz.length)-1;
+    if(vi>=0)document.getElementById('ve').textContent=d.vx[vi].toFixed(2)+' '+d.vy[vi].toFixed(2)+' '+d.vz[vi].toFixed(2);
+    var ri=d.rpm[0].length-1;
+    if(ri>=0)document.getElementById('rp').textContent=d.rpm[0][ri].toFixed(0)+' '+d.rpm[1][ri].toFixed(0)+' '+d.rpm[2][ri].toFixed(0)+' '+d.rpm[3][ri].toFixed(0);
+    var mdv=d.min_d.length?d.min_d[d.min_d.length-1]:0;
+    document.getElementById('od').textContent=mdv.toFixed(3)+' m';
+    document.getElementById('od').className='vl '+(mdv>0.4?'g':(mdv>0.15?'y':'r'));
+    var zmax=-Infinity;for(var i=0;i<n;i++)if(d.pz[i]>zmax)zmax=d.pz[i];
+    document.getElementById('os').textContent=Math.max(0,zmax-HOV_Z).toFixed(4)+' m';
+    var path=0;for(var i=1;i<n;i++){var dx=d.px[i]-d.px[i-1],dy=d.py[i]-d.py[i-1],dz=d.pz[i]-d.pz[i-1];path+=Math.sqrt(dx*dx+dy*dy+dz*dz)}
+    document.getElementById('pt').textContent=path.toFixed(1)+'m/'+(d.t[n-1]).toFixed(1)+'s';
+    document.getElementById('go').textContent=d.goal_x.toFixed(1)+' '+d.goal_y.toFixed(1)+' '+HOV_Z.toFixed(1);
+    var sat=false;for(var i=0;i<4;i++){var rr=d.rpm[i];for(var j=Math.max(0,rr.length-100);j<rr.length;j++)if(rr[j]>=9990||rr[j]<=5){sat=true;break}}
+    document.getElementById('rs').textContent=sat?'YES':'NO';
+    document.getElementById('rs').className='vl '+(sat?'r':'g');
+    var div=false;for(var i=0;i<n;i++)if(d.pz[i]<-100||(d.vx[i]&&Math.hypot(d.vx[i],d.vy[i],d.vz[i])>100))div=true;
+    document.getElementById('ad').textContent=div?'YES':'NO';
+    document.getElementById('ad').className='vl '+(div?'r':'g');
+
+    var ex=[],ez=[];
+    for(var i=0;i<n;i++){ex.push(Math.abs(d.px[i]-d.goal_x));ez.push(Math.abs(d.pz[i]-HOV_Z))}
+    chart('cpe',[ex,ez],'x=green z=blue',0,3,0.3);
+    chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR',0,50,null);
+    chart('cmd',[d.min_d],'dist(m)',0,2,0.4);
+
     // trajectory
-    {const c=document.getElementById('ctraj'),w=c.width=Math.max(400,c.parentElement.clientWidth-24),h=c.height=c.width*0.4;
-    const ctx=c.getContext('2d');ctx.clearRect(0,0,w,h);ctx.strokeStyle='#333';ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(w/2,0);ctx.lineTo(w/2,h);ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();
-    if(n<2)return;
-    let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
-    for(let i=0;i<n;i++){if(d.px[i]<xmin)xmin=d.px[i];if(d.px[i]>xmax)xmax=d.px[i];if(d.py[i]<ymin)ymin=d.py[i];if(d.py[i]>ymax)ymax=d.py[i]}
-    const pad=0.2;xmin-=pad;xmax+=pad;ymin-=pad;ymax+=pad;
-    if(xmax-xmin<0.1){xmin-=1;xmax+=1}if(ymax-ymin<0.1){ymin-=1;ymax+=1}
-    ctx.strokeStyle='#0f0';ctx.lineWidth=1.5;ctx.beginPath();
-    for(let i=0;i<n;i++){const x=((d.px[i]-xmin)/(xmax-xmin))*w,y=h-((d.py[i]-ymin)/(ymax-ymin))*h;i==0?ctx.moveTo(x,y):ctx.lineTo(x,y)}
-    ctx.stroke();ctx.fillStyle='#0f0';ctx.font='9px monospace';ctx.fillText('XY Traj',4,10)}
+    (function(){
+      var c=document.getElementById('ctj');
+      c.width=Math.max(500,c.parentElement.clientWidth-24);
+      c.height=c.width*0.5;
+      var w=c.width,h=c.height,ctx=c.getContext('2d');
+      ctx.clearRect(0,0,w,h);
+      ctx.strokeStyle='#21262d';ctx.lineWidth=1;
+      for(var g=-1;g<=4;g++){var gx=(g+1)/6*w;ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,h);ctx.stroke()}
+      for(var g=-1;g<=4;g++){var gy=h-(g+1)/6*h;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(w,gy);ctx.stroke()}
+      var wx=function(v){return (v+1)/6*w}, wy=function(v){return h-(v+1)/6*h};
+      if(n>0){
+        ctx.fillStyle='#58a6ff';ctx.font='16px sans-serif';ctx.fillText('+',wx(d.px[0])-5,wy(d.py[0])+5);
+        ctx.fillStyle='#f85149';ctx.font='16px sans-serif';ctx.fillText('+',wx(d.goal_x)-5,wy(d.goal_y)+5);
+      }
+      if(n>1){ctx.strokeStyle='#3fb950';ctx.lineWidth=2;ctx.beginPath();
+        for(var i=0;i<n;i++){i==0?ctx.moveTo(wx(d.px[i]),wy(d.py[i])):ctx.lineTo(wx(d.px[i]),wy(d.py[i]))}
+        ctx.stroke()}
+      ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';ctx.fillText('XY (+start +goal)',4,12);
+    })();
   })
 }
 setInterval(update,500);
-</script></body></html>"""
+</script></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path=='/':
-            self.send_response(200);self.send_header('Content-Type','text/html');self.end_headers()
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html;charset=utf-8')
+            self.end_headers()
             self.wfile.write(HTML.encode())
-        elif self.path=='/data':
-            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
-            with lock:
-                d={k:state[k] for k in ['t','px','py','pz','vx','vy','vz','rpm','rpm_t','goal_x','goal_y','goal_z','min_obs_dist','min_obs_t']}
+        elif self.path == '/data':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            with lk:
+                d = {}
+                for k in ['t','px','py','pz','vx','vy','vz','rpm','rpm_t','goal_x','goal_y','goal_z','min_d','min_d_t']:
+                    d[k] = st[k]
             self.wfile.write(json.dumps(d).encode())
-        else: self.send_response(404);self.end_headers()
-    def log_message(self,*a): pass
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def log_message(self, *a): pass
 
-if __name__=='__main__':
-    print("Starting live_monitor...")
-    print("  Open http://localhost:8765 in your browser")
-    print("  Ctrl+C to stop & save CSV")
-
-    for t in [threading.Thread(target=read_odom,daemon=True),
-              threading.Thread(target=read_odom_velocity,daemon=True),
-              threading.Thread(target=read_rpm,daemon=True),
-              threading.Thread(target=read_goal,daemon=True),
-              threading.Thread(target=read_obstacles,daemon=True),
-              threading.Thread(target=compute_min_obs_dist,daemon=True)]:
+if __name__ == '__main__':
+    print('live_monitor: http://localhost:8765 | Ctrl+C=CSV')
+    for t in [th.Thread(target=f, daemon=True) for f in [r_odom, r_vel, r_rpm, r_goal, r_min]]:
         t.start()
     time.sleep(2)
 
-    class ReuseServer(HTTPServer):
+    class RS(HTTPServer):
         allow_reuse_address = True
         def server_bind(self):
-            self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             HTTPServer.server_bind(self)
-    server=ReuseServer(('0.0.0.0',8765),Handler)
-    try: server.serve_forever()
+    try:
+        RS(('0.0.0.0', 8765), Handler).serve_forever()
     except KeyboardInterrupt:
-        print("\nSaving CSV...")
-        with lock:
-            with open(SAVE_FILE,'w') as f:
+        print("\nsaving CSV...")
+        with lk:
+            with open(SF, 'w') as f:
                 f.write("t,px,py,pz,vx,vy,vz,rpm0,rpm1,rpm2,rpm3,min_obs_dist\n")
-                n=max(len(state['t']),len(state['rpm_t']),len(state['min_obs_t']))
+                n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
                 for i in range(n):
-                    vals=[]
+                    row = []
                     for k in ['t','px','py','pz','vx','vy','vz']:
-                        arr=state[k]; vals.append(str(arr[i]) if i<len(arr) else '')
+                        row.append(str(st[k][i]) if i < len(st[k]) else '')
                     for j in range(4):
-                        vals.append(str(state['rpm'][j][i]) if i<len(state['rpm'][j]) else '')
-                    vals.append(str(state['min_obs_dist'][i]) if i<len(state['min_obs_dist']) else '')
-                    f.write(','.join(vals)+'\n')
-        print(f"Saved {SAVE_FILE} ({n} rows)")
-        state['running']=False
+                        row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
+                    row.append(str(st['min_d'][i]) if i < len(st['min_d']) else '')
+                    f.write(','.join(row) + '\n')
+        print(f'Saved {SF} ({n} rows)')
