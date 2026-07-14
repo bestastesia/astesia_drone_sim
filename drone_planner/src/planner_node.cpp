@@ -31,6 +31,7 @@ class PlannerNode : public rclcpp::Node {
     declare_parameter<double>("drone_radius", 0.2);
     declare_parameter<bool>("use_goal_z", true);
     declare_parameter<double>("cruise_altitude", 1.5);
+    declare_parameter<double>("default_hover_z", 1.5);  // goal z<0.5 时用这个替代
     declare_parameter<double>("replan_rate", 1.0);
     declare_parameter<double>("lookahead", 0.5);
     declare_parameter<double>("advance_tol", 0.3);
@@ -96,7 +97,7 @@ class PlannerNode : public rclcpp::Node {
       gx = goal->pose.position.x;
       gy = goal->pose.position.y;
       gz = goal->pose.position.z;
-      if (gz < 0.5) gz = cruise_z_;  // 2D Goal Point fix
+      if (gz < 0.5) gz = get_parameter("default_hover_z").as_double();  // 2D Goal Pose fix
     }
     double z_cruise = use_goal_z_ ? gz : cruise_z_;
 

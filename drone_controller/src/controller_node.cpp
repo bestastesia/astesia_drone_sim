@@ -25,6 +25,7 @@ class ControllerNode : public rclcpp::Node {
     declareParams();
     ctrl_ = std::make_unique<DroneController>(loadParams());
     ctrl_dt_ = get_parameter("ctrl_dt").as_double();
+    default_hover_z_ = get_parameter("default_hover_z").as_double();
 
     // 订阅 odom
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -89,6 +90,7 @@ class ControllerNode : public rclcpp::Node {
     declare_parameter<std::vector<double>>("ladrc_wo", {6.0, 6.0, 10.0});
     declare_parameter<double>("F_min", 0.0);
     declare_parameter<double>("F_max", 39.24);
+    declare_parameter<double>("default_hover_z", 1.5);  // 无 goal 时的默认悬停高度
     declare_parameter<double>("tau_max", 5.0);
     declare_parameter<double>("omega_max", 1000.0);
     declare_parameter<double>("rpm_min", 0.0);
@@ -204,20 +206,15 @@ class ControllerNode : public rclcpp::Node {
             odom->pose.pose.orientation.y, odom->pose.pose.orientation.z);
     Vec3d w(odom->twist.twist.angular.x, odom->twist.twist.angular.y, odom->twist.twist.angular.z);
 
-    // 目标 — 默认悬停在当前位置 1.5 m
-    Vec3d goal_p = p; goal_p.z() = 1.5;
+    // 目标 — 无 goal 时悬停在 default_hover_z
+    Vec3d goal_p = p; goal_p.z() = default_hover_z_;
     double goal_yaw = 0.0;
     if (goal) {
       goal_p.x() = goal->pose.position.x;
       goal_p.y() = goal->pose.position.y;
       goal_p.z() = goal->pose.position.z;
-      // 从 goal 四元数取 yaw
-      Quatd qg(goal->pose.orientation.w, goal->pose.orientation.x,
-               goal->pose.orientation.y, goal->pose.orientation.z);
-      auto euler = qg.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX
-      goal_yaw = euler(0);
-      // 2D Goal Point 给 z=0 → 抬到最低 1.0
-      if (goal_p.z() < 0.5) goal_p.z() = 1.5;
+      // 2D Goal Pose 给 z=0 → 用 default_hover_z 覆盖
+      if (goal_p.z() < 0.5) goal_p.z() = default_hover_z_;
     }
 
     auto rpm = ctrl_->step(p, v, q, w, goal_p, goal_yaw);
@@ -241,6 +238,7 @@ class ControllerNode : public rclcpp::Node {
 
   std::unique_ptr<DroneController> ctrl_;
   double ctrl_dt_ = 0.005;
+  double default_hover_z_ = 1.5;
   uint64_t tick_cnt_ = 0;
 
   std::mutex mtx_;
