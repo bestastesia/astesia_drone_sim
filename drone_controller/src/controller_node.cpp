@@ -163,6 +163,17 @@ class ControllerNode : public rclcpp::Node {
             ctrl_->params().ladrc_wc,
             Vec3d(wo[0],wo[1],wo[2]));
         RCLCPP_INFO(get_logger(), "LADRC wo updated: [%.1f %.1f %.1f]", wo[0],wo[1],wo[2]);
+      } else if (p.get_name() == "Kp_pos" || p.get_name() == "Kd_pos" ||
+                 p.get_name() == "Kp_att" || p.get_name() == "Kd_rate") {
+        auto kp = get_parameter("Kp_pos").as_double_array();
+        auto kd = get_parameter("Kd_pos").as_double_array();
+        auto kpa = get_parameter("Kp_att").as_double_array();
+        auto kdr = get_parameter("Kd_rate").as_double_array();
+        ctrl_->setPDGains(
+            Vec3d(kp[0],kp[1],kp[2]), Vec3d(kd[0],kd[1],kd[2]),
+            Vec3d(kpa[0],kpa[1],kpa[2]), Vec3d(kdr[0],kdr[1],kdr[2]));
+        RCLCPP_INFO(get_logger(), "PD gains updated: Kp=[%.1f %.1f %.1f] Kd=[%.1f %.1f %.1f]",
+            kp[0],kp[1],kp[2], kd[0],kd[1],kd[2]);
       }
     }
     rcl_interfaces::msg::SetParametersResult result;

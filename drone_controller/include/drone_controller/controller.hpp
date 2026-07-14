@@ -98,6 +98,11 @@ class DroneController {
 
   void setControlMode(const std::string& mode) { params_.control_mode = mode; }
 
+  void setPDGains(const Vec3d& kp, const Vec3d& kd, const Vec3d& kp_att, const Vec3d& kd_rate) {
+    params_.Kp_pos = kp; params_.Kd_pos = kd;
+    params_.Kp_att = kp_att; params_.Kd_rate = kd_rate;
+  }
+
   // 每控制周期调一次：odom 状态 + 目标位姿 → 4 RPM
   // odom_p = [x,y,z] 世界系
   // odom_v = [vx,vy,vz]
