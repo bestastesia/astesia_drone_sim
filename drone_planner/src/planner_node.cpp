@@ -139,6 +139,16 @@ class PlannerNode : public rclcpp::Node {
     auto grid = drone_planner::buildOccupancyGrid(
         obstacles, resolution_, bounds_[0], bounds_[1],
         bounds_[2], bounds_[3], inflate, z_cruise);
+
+    // 强制清空起点周围区域（避免无人机出生地被膨胀覆盖）
+    int psx, psy;
+    grid.worldToGrid(px, py, psx, psy);
+    int clear_radius_cells = static_cast<int>(std::ceil((safety_dist_ + drone_r_) / resolution_));
+    for (int dy = -clear_radius_cells; dy <= clear_radius_cells; ++dy)
+      for (int dx = -clear_radius_cells; dx <= clear_radius_cells; ++dx)
+        if (grid.inBounds(psx + dx, psy + dy))
+          grid.at(psx + dx, psy + dy) = 0;
+
     int occupied = 0;
     for (auto v : grid.cells) if (v) ++occupied;
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
