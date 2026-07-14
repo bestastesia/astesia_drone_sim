@@ -133,7 +133,7 @@ class MapNode : public rclcpp::Node {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> dx(bounds[0], bounds[1]);
     std::uniform_real_distribution<double> dy(bounds[2], bounds[3]);
-    std::uniform_real_distribution<double> dz(0.5, 2.5);
+    std::uniform_real_distribution<double> dz(1.0, 2.0);  // 集中在巡航高度附近
     std::uniform_real_distribution<double> ds(smin, smax);
 
     // 建立形状队列：先放指定数量的每种，剩余随机分配
@@ -166,7 +166,7 @@ class MapNode : public rclcpp::Node {
       ++sq_idx;
       if (o.shape == Shape::Sphere) { o.radius = s; }
       else if (o.shape == Shape::Cylinder) { o.radius = s; o.height = 2.0; }
-      else { o.half_extents << s, s, s * 0.5; }
+      else { o.half_extents << s, s, 0.6; }  // 立方足够高，与巡航高度重叠
       // reject near start (0,0,1.5) or goal (2,1,1.5)
       if ((o.center - Eigen::Vector3d(0, 0, 1.5)).norm() < clear_r) continue;
       if ((o.center - Eigen::Vector3d(2, 1, 1.5)).norm() < clear_r) continue;

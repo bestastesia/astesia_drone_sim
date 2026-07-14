@@ -4,7 +4,7 @@ drone_map:
   ros__parameters:
     procedural: true
     seed: 42
-    num_obstacles: 18
+    num_obstacles: 38
     # 形状数量分配（-1 = 不限，按 num_obstacles 随机分配）
     num_spheres: 3
     num_cylinders: 3
