@@ -6,6 +6,7 @@
 #include <vector>
 #include <random>
 #include <string>
+#include <sstream>
 
 #include "rclcpp/rclcpp.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
@@ -29,26 +30,60 @@ class MapNode : public rclcpp::Node {
         {"sphere 0.0 0.0 1.5 0.3"});  // 默认占位，YAML 会覆盖
     declare_parameter<std::string>("frame_id", "map");
 
-    bool procedural = get_parameter("procedural").as_bool();
-    if (procedural) {
-      obstacles_ = generateProcedural();
-    } else {
-      obstacles_ = loadExplicit();
-    }
-    if (obstacles_.empty()) {
-      // fallback
-      Obstacle o; o.shape = Shape::Sphere; o.center << 0, 0, 1.5; o.radius = 0.3;
-      obstacles_.push_back(o);
-    }
+    obstacles_ = generateFromParams();
 
     pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/map/obstacles", 10);
     timer_ = create_wall_timer(std::chrono::seconds(1), [this]() { publish(); });
     first_publish_ = true;
 
-    RCLCPP_INFO(get_logger(), "drone_map ready: %zu obstacles", obstacles_.size());
+    // 运行时参数变更回调——支持 ros2 param set 立即重新生成障碍物
+    param_cb_handle_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params) {
+          return onParamChange(params);
+        });
+
+    RCLCPP_INFO(get_logger(), "drone_map ready: %zu obstacles, procedural=%s seed=%d",
+        obstacles_.size(),
+        get_parameter("procedural").as_bool() ? "true" : "false",
+        get_parameter("seed").as_int());
   }
 
  private:
+  std::vector<Obstacle> generateFromParams() {
+    bool procedural = get_parameter("procedural").as_bool();
+    std::vector<Obstacle> obs;
+    if (procedural) {
+      obs = generateProcedural();
+    } else {
+      obs = loadExplicit();
+    }
+    if (obs.empty()) {
+      Obstacle o; o.shape = Shape::Sphere; o.center << 0, 0, 1.5; o.radius = 0.3;
+      obs.push_back(o);
+    }
+    return obs;
+  }
+
+  rcl_interfaces::msg::SetParametersResult onParamChange(
+      const std::vector<rclcpp::Parameter>& params) {
+    bool need_regen = false;
+    for (const auto& p : params) {
+      const auto& n = p.get_name();
+      if (n == "procedural" || n == "seed" || n == "num_obstacles" ||
+          n == "bounds" || n == "clear_radius" || n == "size_min" ||
+          n == "size_max" || n == "obstacles") {
+        need_regen = true;
+      }
+    }
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    if (need_regen) {
+      obstacles_ = generateFromParams();
+      first_publish_ = true;  // 下一帧发 DELETEALL 清旧 Marker
+      RCLCPP_INFO(get_logger(), "regenerated: %zu obstacles", obstacles_.size());
+    }
+    return result;
+  }
   std::vector<Obstacle> loadExplicit() {
     std::vector<Obstacle> obs;
     auto raw = get_parameter("obstacles").as_string_array();
@@ -170,6 +205,7 @@ class MapNode : public rclcpp::Node {
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   bool first_publish_ = true;
+  OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 };
 
 int main(int argc, char** argv) {
