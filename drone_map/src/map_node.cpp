@@ -23,6 +23,9 @@ class MapNode : public rclcpp::Node {
     declare_parameter<int>("seed", 42);
     declare_parameter<std::vector<double>>("bounds", {-2.0, 4.0, -2.0, 4.0, 0.0, 5.0});
     declare_parameter<int>("num_obstacles", 8);
+    declare_parameter<int>("num_spheres", -1);     // -1 = 不限制（随机分配）
+    declare_parameter<int>("num_cylinders", -1);
+    declare_parameter<int>("num_cubes", -1);
     declare_parameter<double>("clear_radius", 0.8);
     declare_parameter<double>("size_min", 0.2);
     declare_parameter<double>("size_max", 0.5);
@@ -71,7 +74,8 @@ class MapNode : public rclcpp::Node {
       const auto& n = p.get_name();
       if (n == "procedural" || n == "seed" || n == "num_obstacles" ||
           n == "bounds" || n == "clear_radius" || n == "size_min" ||
-          n == "size_max" || n == "obstacles") {
+          n == "size_max" || n == "obstacles" ||
+          n == "num_spheres" || n == "num_cylinders" || n == "num_cubes") {
         need_regen = true;
       }
     }
@@ -118,6 +122,9 @@ class MapNode : public rclcpp::Node {
     int seed = get_parameter("seed").as_int();
     auto bounds = get_parameter("bounds").as_double_array();
     int num = get_parameter("num_obstacles").as_int();
+    int n_spheres   = get_parameter("num_spheres").as_int();
+    int n_cylinders = get_parameter("num_cylinders").as_int();
+    int n_cubes     = get_parameter("num_cubes").as_int();
     double clear_r = get_parameter("clear_radius").as_double();
     double smin = get_parameter("size_min").as_double();
     double smax = get_parameter("size_max").as_double();
@@ -128,19 +135,38 @@ class MapNode : public rclcpp::Node {
     std::uniform_real_distribution<double> dy(bounds[2], bounds[3]);
     std::uniform_real_distribution<double> dz(0.5, 2.5);
     std::uniform_real_distribution<double> ds(smin, smax);
+
+    // 建立形状队列：先放指定数量的每种，剩余随机分配
+    std::vector<Shape> shape_queue;
+    int ns = (n_spheres   >= 0) ? n_spheres   : num;   // -1 = 不限
+    int nc = (n_cylinders >= 0) ? n_cylinders : num;
+    int nb = (n_cubes     >= 0) ? n_cubes     : num;
+    for (int i = 0; i < ns; ++i) shape_queue.push_back(Shape::Sphere);
+    for (int i = 0; i < nc; ++i) shape_queue.push_back(Shape::Cylinder);
+    for (int i = 0; i < nb; ++i) shape_queue.push_back(Shape::Cube);
+
+    // 补充到至少 num 个（用随机填充）
     std::uniform_int_distribution<int> shape_rng(0, 2);
+    while ((int)shape_queue.size() < num) {
+      int st = shape_rng(rng);
+      if (st == 0) shape_queue.push_back(Shape::Sphere);
+      else if (st == 1) shape_queue.push_back(Shape::Cylinder);
+      else shape_queue.push_back(Shape::Cube);
+    }
 
     std::vector<Obstacle> obs;
     int attempts = 0;
-    while ((int)obs.size() < num && attempts < 500) {
+    size_t sq_idx = 0;
+    while ((int)obs.size() < num && attempts < 1000) {
       ++attempts;
       Obstacle o;
       o.center << dx(rng), dy(rng), dz(rng);
       double s = ds(rng);
-      int st = shape_rng(rng);
-      if (st == 0) { o.shape = Shape::Sphere; o.radius = s; }
-      else if (st == 1) { o.shape = Shape::Cylinder; o.radius = s; o.height = 2.0; }
-      else { o.shape = Shape::Cube; o.half_extents << s, s, s * 0.5; }
+      o.shape = shape_queue[sq_idx % shape_queue.size()];
+      ++sq_idx;
+      if (o.shape == Shape::Sphere) { o.radius = s; }
+      else if (o.shape == Shape::Cylinder) { o.radius = s; o.height = 2.0; }
+      else { o.half_extents << s, s, s * 0.5; }
       // reject near start (0,0,1.5) or goal (2,1,1.5)
       if ((o.center - Eigen::Vector3d(0, 0, 1.5)).norm() < clear_r) continue;
       if ((o.center - Eigen::Vector3d(2, 1, 1.5)).norm() < clear_r) continue;

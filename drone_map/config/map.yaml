@@ -4,10 +4,15 @@ drone_map:
   ros__parameters:
     procedural: true
     seed: 42
+    num_obstacles: 8
+    # 形状数量分配（-1 = 不限，按 num_obstacles 随机分配）
+    num_spheres: 3
+    num_cylinders: 3
+    num_cubes: 2
     frame_id: "map"
     obstacles:
       # (0.7, 0.3) r=0.35 → 距目标 1.48 > 0.95 ✓，挡直线 (0.7, 0.35) 处
-      - "sphere 0.7 0.3 1.5 0.9"
+      - "sphere 0.7 0.3 1.5 9.9"
       # (1.0, 0.5) r=0.35 → 距目标 1.12 > 0.95 ✓，挡直线 (1.0, 0.5) 处
       - "sphere 1.0 0.5 1.5 0.35"
       # (1.3, 0.65) r=0.3 → 距目标 0.78 > 0.9？→ 0.78 < 0.9 ✗：调小 r=0.2 → infl=0.8, 距离 0.78 < 0.8 仍近 → 移到 (1.3, 0.5) 距 0.86 > 0.8 ✓
