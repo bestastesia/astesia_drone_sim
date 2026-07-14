@@ -19,6 +19,7 @@
 #include <cmath>
 
 #include "drone_common/drone_common.hpp"
+#include "drone_controller/ladrc.hpp"
 
 namespace drone_controller {
 
@@ -58,6 +59,12 @@ struct Params {
   double k_M = 0.05;
   // 控制周期
   double ctrl_dt = 0.005;         // 200 Hz 默认
+
+  // LADRC 参数
+  std::string control_mode = "pd";  // "pd" 或 "ladrc"
+  Vec3d ladrc_b0{1.0, 1.0, 1.0};   // 各轴输入增益
+  Vec3d ladrc_wc{2.0, 2.0, 3.0};   // 控制器带宽
+  Vec3d ladrc_wo{10.0, 10.0, 15.0}; // 观测器带宽
 };
 
 // 将马达 ω² 转为 RPM
@@ -76,9 +83,20 @@ class DroneController {
   explicit DroneController(const Params& p) : params_(p) {
     if (p.mass <= 0) throw std::invalid_argument("Controller: mass <= 0");
     Binv_ = drone_common::buildMixerMatrixInverse(p.arm_length, p.k_F, p.k_M);
+    ladrc_.configure(p.ladrc_b0, p.ladrc_wc, p.ladrc_wo, p.ctrl_dt);
   }
 
   const Params& params() const { return params_; }
+
+  // 运行时热切换 LADRC 参数（供自动调参使用）
+  void setLADRCParams(const Vec3d& b0, const Vec3d& wc, const Vec3d& wo) {
+    params_.ladrc_b0 = b0;
+    params_.ladrc_wc = wc;
+    params_.ladrc_wo = wo;
+    ladrc_.configure(b0, wc, wo, params_.ctrl_dt);
+  }
+
+  void setControlMode(const std::string& mode) { params_.control_mode = mode; }
 
   // 每控制周期调一次：odom 状态 + 目标位姿 → 4 RPM
   // odom_p = [x,y,z] 世界系
@@ -95,15 +113,21 @@ class DroneController {
     // 1. 位置误差 → 期望加速度
     Vec3d ep = goal_p - odom_p;
     Vec3d ev = -odom_v;  // v_des = 0 (hover / waypoint-hold)
-    Vec3d a_des = params_.Kp_pos.cwiseProduct(ep) + params_.Kd_pos.cwiseProduct(ev);
+    Vec3d a_des;
 
-    // 积分（如果非零）
-    ep_integral_ += ep * params_.ctrl_dt;
-    ep_integral_ = ep_integral_.cwiseMin(params_.Ki_max).cwiseMax(-params_.Ki_max);
-    if (params_.Ki_pos.norm() > 1e-9)
-      a_des += params_.Ki_pos.cwiseProduct(ep_integral_);
+    if (params_.control_mode == "ladrc") {
+      // LADRC 三轴独立计算（观测器已在内部更新）
+      a_des = ladrc_.step(odom_p, goal_p);
+    } else {
+      // PD + 可选积分
+      a_des = params_.Kp_pos.cwiseProduct(ep) + params_.Kd_pos.cwiseProduct(ev);
+      ep_integral_ += ep * params_.ctrl_dt;
+      ep_integral_ = ep_integral_.cwiseMin(params_.Ki_max).cwiseMax(-params_.Ki_max);
+      if (params_.Ki_pos.norm() > 1e-9)
+        a_des += params_.Ki_pos.cwiseProduct(ep_integral_);
+    }
 
-    // 加速度限幅 & 远目标 failsafe
+    // 加速度限幅 & 远目标 failsafe（两种模式共用）
     if (ep.norm() > params_.d_far) {
       a_des = ep.normalized() * params_.a_max_vec;
       ep_integral_.setZero();
@@ -169,6 +193,7 @@ class DroneController {
   Params params_;
   Eigen::Matrix4d Binv_;
   Vec3d ep_integral_{0, 0, 0};
+  LADRC3D ladrc_;
 };
 
 }  // namespace drone_controller

@@ -52,10 +52,17 @@ class ControllerNode : public rclcpp::Node {
         std::chrono::microseconds(period_us), [this]() { tick(); });
 
     RCLCPP_INFO(get_logger(),
-        "controller ready: Kp=[%.1f %.1f %.1f] Kd=[%.1f %.1f %.1f] dt=%.2fms",
+        "controller ready: mode=%s Kp=[%.1f %.1f %.1f] Kd=[%.1f %.1f %.1f] dt=%.2fms",
+        ctrl_->params().control_mode.c_str(),
         ctrl_->params().Kp_pos.x(), ctrl_->params().Kp_pos.y(), ctrl_->params().Kp_pos.z(),
         ctrl_->params().Kd_pos.x(), ctrl_->params().Kd_pos.y(), ctrl_->params().Kd_pos.z(),
         ctrl_dt_ * 1e3);
+
+    // 运行时参数变更回调（支持 ros2 param set 热切换 LADRC 参数）
+    param_cb_handle_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params) {
+          return onParamChange(params);
+        });
   }
 
  private:
@@ -64,17 +71,22 @@ class ControllerNode : public rclcpp::Node {
     declare_parameter<double>("arm_length", 0.2);
     declare_parameter<double>("k_F", 1.0);
     declare_parameter<double>("k_M", 0.05);
-    declare_parameter<std::vector<double>>("Kp_pos", {3.5, 3.5, 5.0});
-    declare_parameter<std::vector<double>>("Kd_pos", {4.0, 4.0, 5.0});
+    declare_parameter<std::vector<double>>("Kp_pos", {2.5, 2.5, 4.0});
+    declare_parameter<std::vector<double>>("Kd_pos", {2.2, 2.2, 2.8});
     declare_parameter<std::vector<double>>("Ki_pos", {0.0, 0.0, 0.0});
     declare_parameter<double>("Ki_max", 1.0);
-    declare_parameter<double>("a_xy_max", 6.0);
+    declare_parameter<double>("a_xy_max", 4.0);
     declare_parameter<double>("a_z_min", -3.0);
-    declare_parameter<double>("a_z_max", 8.0);
-    declare_parameter<double>("a_max_vec", 10.0);
-    declare_parameter<double>("d_far", 5.0);
-    declare_parameter<std::vector<double>>("Kp_att", {12.0, 12.0, 4.0});
-    declare_parameter<std::vector<double>>("Kd_rate", {4.0, 4.0, 2.0});
+    declare_parameter<double>("a_z_max", 6.0);
+    declare_parameter<double>("a_max_vec", 8.0);
+    declare_parameter<double>("d_far", 10.0);
+    declare_parameter<std::vector<double>>("Kp_att", {8.0, 8.0, 3.0});
+    declare_parameter<std::vector<double>>("Kd_rate", {2.0, 2.0, 1.5});
+    // LADRC 参数
+    declare_parameter<std::string>("control_mode", "pd");
+    declare_parameter<std::vector<double>>("ladrc_b0", {1.0, 1.0, 1.0});
+    declare_parameter<std::vector<double>>("ladrc_wc", {2.0, 2.0, 3.0});
+    declare_parameter<std::vector<double>>("ladrc_wo", {10.0, 10.0, 15.0});
     declare_parameter<double>("F_min", 0.0);
     declare_parameter<double>("F_max", 39.24);
     declare_parameter<double>("tau_max", 5.0);
@@ -113,7 +125,49 @@ class ControllerNode : public rclcpp::Node {
     p.rpm_min = get_parameter("rpm_min").as_double();
     p.rpm_max = get_parameter("rpm_max").as_double();
     p.ctrl_dt = get_parameter("ctrl_dt").as_double();
+    // LADRC
+    p.control_mode = get_parameter("control_mode").as_string();
+    auto b0 = get_parameter("ladrc_b0").as_double_array();
+    auto wc = get_parameter("ladrc_wc").as_double_array();
+    auto wo = get_parameter("ladrc_wo").as_double_array();
+    if (b0.size()>=3) p.ladrc_b0 << b0[0],b0[1],b0[2];
+    if (wc.size()>=3) p.ladrc_wc << wc[0],wc[1],wc[2];
+    if (wo.size()>=3) p.ladrc_wo << wo[0],wo[1],wo[2];
     return p;
+  }
+
+  rcl_interfaces::msg::SetParametersResult onParamChange(
+      const std::vector<rclcpp::Parameter>& params) {
+    for (const auto& p : params) {
+      if (p.get_name() == "control_mode") {
+        ctrl_->setControlMode(p.as_string());
+        RCLCPP_INFO(get_logger(), "switched to mode=%s", p.as_string().c_str());
+      } else if (p.get_name() == "ladrc_b0") {
+        auto b0 = get_parameter("ladrc_b0").as_double_array();
+        ctrl_->setLADRCParams(
+            Vec3d(b0[0],b0[1],b0[2]),
+            ctrl_->params().ladrc_wc,
+            ctrl_->params().ladrc_wo);
+        RCLCPP_INFO(get_logger(), "LADRC b0 updated: [%.3f %.3f %.3f]", b0[0],b0[1],b0[2]);
+      } else if (p.get_name() == "ladrc_wc") {
+        auto wc = get_parameter("ladrc_wc").as_double_array();
+        ctrl_->setLADRCParams(
+            ctrl_->params().ladrc_b0,
+            Vec3d(wc[0],wc[1],wc[2]),
+            ctrl_->params().ladrc_wo);
+        RCLCPP_INFO(get_logger(), "LADRC wc updated: [%.1f %.1f %.1f]", wc[0],wc[1],wc[2]);
+      } else if (p.get_name() == "ladrc_wo") {
+        auto wo = get_parameter("ladrc_wo").as_double_array();
+        ctrl_->setLADRCParams(
+            ctrl_->params().ladrc_b0,
+            ctrl_->params().ladrc_wc,
+            Vec3d(wo[0],wo[1],wo[2]));
+        RCLCPP_INFO(get_logger(), "LADRC wo updated: [%.1f %.1f %.1f]", wo[0],wo[1],wo[2]);
+      }
+    }
+    rcl_interfaces::msg::SetParametersResult result;
+    result.successful = true;
+    return result;
   }
 
   void tick() {
@@ -186,6 +240,7 @@ class ControllerNode : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr rpm_pub_;
   rclcpp::TimerBase::SharedPtr ctrl_timer_;
+  OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 };
 
 int main(int argc, char** argv) {
