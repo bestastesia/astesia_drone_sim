@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>astesia_drone_sim — 验收场景录制指南</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#c9d1d9;line-height:1.6;padding:24px}
+  .container{max-width:900px;margin:0 auto}
+  h1{color:#58a6ff;font-size:1.8em;margin-bottom:8px}
+  h2{color:#f0883e;font-size:1.3em;margin:32px 0 12px;padding-bottom:6px;border-bottom:1px solid #30363d}
+  h3{color:#d2a8ff;font-size:1.05em;margin:16px 0 8px}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin:12px 0}
+  .card.pass{border-left:3px solid #3fb950}
+  .card.fail{border-left:3px solid #f85149}
+  .cmd{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 16px;margin:8px 0;font-family:'JetBrains Mono',monospace;font-size:0.9em;color:#7ee787;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+  .inline{background:#21262d;color:#d2a8ff;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:0.9em}
+  .note{background:#1f2429;border-left:3px solid #d29922;padding:10px 14px;margin:8px 0;border-radius:0 6px 6px 0;font-size:0.9em}
+  .warn{background:#1f2429;border-left:3px solid #f85149;padding:10px 14px;margin:8px 0;border-radius:0 6px 6px 0;font-size:0.9em}
+  table{width:100%;border-collapse:collapse;margin:8px 0}
+  th,td{border:1px solid #30363d;padding:8px 12px;text-align:left;font-size:0.9em}
+  th{background:#21262d;color:#f0f6fc}
+  .ok{color:#3fb950;font-weight:bold}
+  .metric{font-family:monospace;color:#7ee787}
+  .phase{display:inline-block;background:#388bfd;color:#fff;padding:2px 8px;border-radius:12px;font-size:0.8em;margin-right:4px}
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:12px 0}
+  .summary-item{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px;text-align:center}
+  .summary-item .val{font-size:1.6em;font-weight:bold;color:#7ee787}
+  .summary-item .label{font-size:0.8em;color:#8b949e}
+  .tabs{display:flex;gap:4px;margin:12px 0}
+  .tab{padding:8px 16px;background:#21262d;border:1px solid #30363d;border-radius:6px 6px 0 0;cursor:pointer;color:#8b949e;font-size:0.9em}
+  .tab.active{background:#161b22;color:#f0f6fc;border-bottom-color:#161b22}
+  .tab-content{display:none;background:#161b22;border:1px solid #30363d;border-radius:0 6px 6px 6px;padding:16px}
+  .tab-content.active{display:block}
+  a{color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🚁 astesia_drone_sim — 验收场景录制指南</h1>
+<p style="color:#8b949e;margin-bottom:24px">6 个场景 → 每个 8 秒 → 一条命令搞定，脚本自动打印数值结果</p>
+
+<!-- ====== 前置条件 ====== -->
+<h2>📋 前置准备（每次开新终端只做一次）</h2>
+<div class="card">
+  <p style="margin-bottom:8px">打开终端，执行下面 <strong>3 条命令</strong>：</p>
+  <div class="cmd">cd /home/astesia/drone_sim_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash</div>
+  <p style="font-size:0.85em;color:#8b949e">这三行之后，当前终端就有了 <span class="inline">ros2</span> 和 <span class="inline">ros2 launch</span> 命令。</p>
+</div>
+
+<!-- ====== 场景总览 ====== -->
+<h2>🎯 六个验收场景 — 总览</h2>
+<table>
+<tr><th>#</th><th>场景名</th><th>命令前缀</th><th>要求</th></tr>
+<tr><td>1</td><td>悬停</td><td>自动（无需发 goal）</td><td>稳态 z 误差 < 0.3m</td></tr>
+<tr><td>2</td><td>目标点</td><td>另开终端 pub goal</td><td>收敛到 (2,1,1.5)</td></tr>
+<tr><td>3</td><td>多目标点</td><td>waypoint_sender 脚本</td><td>顺序飞完正方形</td></tr>
+<tr><td>4</td><td>静态避障</td><td>full.launch + pub goal</td><td>路径绕开障碍物</td></tr>
+<tr><td>5</td><td>狭窄通道</td><td>full.launch + 对角线 goal</td><td>轨迹明显弯曲绕行</td></tr>
+<tr><td>6</td><td>稳定性曲线</td><td>录 bag + record_and_analyze.sh</td><td>出 CSV 数据，误差<0.3m</td></tr>
+</table>
+
+<!-- ====== 场景 1: 悬停 ====== -->
+<h2><span class="phase">场景 1</span> 悬停实验</h2>
+<div class="card pass">
+  <h3>怎么做</h3>
+  <p>不需要发任何目标——控制器默认就会飞向 <span class="inline">z=1.5</span> 并悬停。</p>
+
+  <p style="margin-top:8px"><strong>终端 1</strong> — 启动系统：</p>
+  <div class="cmd">ros2 launch drone_bringup no_planner.launch.py</div>
+
+  <p style="margin-top:8px"><strong>终端 2</strong> — 录制 bag + 自动分析：</p>
+  <div class="cmd">bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_hover 8</div>
+
+  <div class="note">
+    <strong>8 是什么意思？</strong> 录制 8 秒。脚本会自动打印：「Steady-state z error: 0.0001m」「Max z: 1.51」「Overshoot: 0.01m」。
+  </div>
+  <div class="note">
+    <strong>bag_hover 是什么？</strong> 输出目录名，随便起。脚本会生成两个文件：<br>
+    <span class="inline">bag_hover/</span> — rosbag（给评审老师回放用）<br>
+    <span class="inline">bag_hover_odom.txt</span> — 位置文本数据（给 plot_bag 分析用）
+  </div>
+
+  <h3 style="margin-top:16px">期望结果</h3>
+  <div class="summary-grid">
+    <div class="summary-item"><div class="val">&lt;0.3m</div><div class="label">稳态误差</div></div>
+    <div class="summary-item"><div class="val">&lt;0.2m</div><div class="label">超调量</div></div>
+    <div class="summary-item"><div class="val">~15</div><div class="label">RPM 稳态</div></div>
+  </div>
+</div>
+
+<!-- ====== 场景 2: 目标点 ====== -->
+<h2><span class="phase">场景 2</span> 目标点实验</h2>
+<div class="card pass">
+  <h3>怎么做</h3>
+
+  <p><strong>终端 1</strong> — 启动系统（同场景 1）：</p>
+  <div class="cmd">ros2 launch drone_bringup no_planner.launch.py</div>
+
+  <p style="margin-top:8px"><strong>终端 2</strong> — 先发目标点，再录 bag：</p>
+  <div class="cmd"># 第 1 步：发目标 (2,1,1.5)
+ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 1.5}}}'
+
+# 第 2 步：立刻录 8 秒（无人机飞过去的过程中）
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_gotogoal 8</div>
+
+  <div class="warn">
+    <strong>⚠️ 顺序很重要</strong>：先 pub goal（无人机开始飞），马上 run record 命令。两行可以复制粘贴连续执行。
+  </div>
+
+  <h3>期望结果</h3>
+  <p>脚本输出：Steady-state error 应该接近 <span class="metric">0.00x m</span>，最终位置在 (2, 1, 1.5) 附近。</p>
+</div>
+
+<!-- ====== 场景 3: 多目标点正方形 ====== -->
+<h2><span class="phase">场景 3</span> 多目标点正方形航线</h2>
+<div class="card pass">
+  <h3>怎么做</h3>
+
+  <p><strong>终端 1</strong> — 启动系统：</p>
+  <div class="cmd">ros2 launch drone_bringup no_planner.launch.py</div>
+
+  <p style="margin-top:8px"><strong>终端 2</strong> — 起航点发送器 + 同时录 bag：</p>
+  <div class="cmd">ros2 run drone_bringup waypoint_sender.py --ros-args -p hold_time:=4.0</div>
+
+  <p style="margin-top:8px"><strong>终端 3</strong> — 录 bag（等航点脚本跑起来了再开）：</p>
+  <div class="cmd">bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_square 22</div>
+
+  <div class="note">
+    <strong>hold_time:=4.0</strong> 意思是每个角停 4 秒。正方形 5 个点 × 4s = 20s，录 22s 覆盖全程。
+  </div>
+  <div class="note">
+    你也可以不跑 waypoint_sender，而是在 RViz 里用 <strong>2D Goal Pose</strong> 工具手动点 4 个角——效果一样。
+  </div>
+</div>
+
+<!-- ====== 场景 4: 静态避障 ====== -->
+<h2><span class="phase">场景 4</span> 静态避障实验</h2>
+<div class="card pass">
+  <h3>怎么做</h3>
+
+  <p><strong>终端 1</strong> — 启动<strong>完整系统</strong>（带地图+规划器）：</p>
+  <div class="cmd">ros2 launch drone_bringup full.launch.py</div>
+
+  <p style="margin-top:8px"><strong>终端 2</strong> — 发目标 + 录 bag：</p>
+  <div class="cmd"># 先发目标（障碍物挡路，需要绕行）
+ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 1.5}}}'
+
+# 马上录 10 秒
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_obstacle 10</div>
+
+  <h3>在 RViz 里确认</h3>
+  <ul style="margin-left:20px">
+    <li>✅ 6 个橙色障碍物可见</li>
+    <li>✅ 黄色 <span class="inline">/drone/planned_path</span> 弯曲绕过橙色物体</li>
+    <li>✅ 绿色箭头沿黄色路径飞行，不穿过障碍物</li>
+  </ul>
+</div>
+
+<!-- ====== 场景 5: 狭窄通道 ====== -->
+<h2><span class="phase">场景 5</span> 狭窄通道绕行</h2>
+<div class="card pass">
+  <h3>怎么做</h3>
+
+  <p><strong>终端 1</strong> — 完整系统：</p>
+  <div class="cmd">ros2 launch drone_bringup full.launch.py</div>
+
+  <p style="margin-top:8px"><strong>终端 2</strong> — 发对角线目标，迫使穿过障碍物群：</p>
+  <div class="cmd"># 从 (0,0) 到 (2.5, 2.0) —— 必然穿过中心障碍物区域
+ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.5, y: 2.0, z: 1.5}}}'
+
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_narrow 10</div>
+
+  <h3>期望</h3>
+  <p>黄色规划路径明显弯曲绕开中心障碍物群（而非直线），无人机沿曲线飞行。</p>
+</div>
+
+<!-- ====== 场景 6: 稳定性曲线 ====== -->
+<h2><span class="phase">场景 6</span> 稳定性曲线</h2>
+<div class="card">
+  <p>场景 1-5 每个录完都有 CSV 文件。把它们汇总进报告即可：</p>
+  <ul style="margin-left:20px;margin-top:8px">
+    <li>每个 bag_*_odom.txt → 导入 Excel/PlotJuggler → 画出位置误差 vs 时间图</li>
+    <li>每个 bag_*_rpm.txt → 画 4 条 RPM 曲线</li>
+    <li>trajectory 图：从 odom.txt 的 x,y,z 列画 2D/3D 轨迹</li>
+  </ul>
+  <div class="note">
+    <strong>report/report.md 第 6 节</strong> 已经预留了表格位置——把脚本输出的数值填进去。
+  </div>
+</div>
+
+<!-- ====== 速查表 ====== -->
+<h2>📋 命令速查表</h2>
+<table>
+<tr><th>我想做什么</th><th>命令（终端 2）</th></tr>
+<tr><td>悬停 + 录 bag</td><td class="cmd" style="font-size:0.85em">bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_hover 8</td></tr>
+<tr><td>发目标点 (2,1,1.5)</td><td class="cmd" style="font-size:0.85em">ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 1.5}}}'</td></tr>
+<tr><td>跑正方形航线</td><td class="cmd" style="font-size:0.85em">ros2 run drone_bringup waypoint_sender.py --ros-args -p hold_time:=4.0</td></tr>
+<tr><td>在 RViz 里点目标</td><td>工具栏 → 🚩 2D Goal Pose → 在 map 上点一个位置 → 弹出框里 z 改成 1.5 → 确定</td></tr>
+<tr><td>切换 LADRC（实验）</td><td class="cmd" style="font-size:0.85em">ros2 param set /drone_controller control_mode ladrc</td></tr>
+</table>
+
+<!-- ====== 文件产出清单 ====== -->
+<h2>📁 录完后的文件清单</h2>
+<div class="card">
+  <table>
+  <tr><th>文件</th><th>用途</th></tr>
+  <tr><td><span class="inline">bag_hover/</span> (目录)</td><td>rosbag — 放报告附录，评审可以 ros2 bag play 回放</td></tr>
+  <tr><td><span class="inline">bag_hover_odom.txt</span></td><td>位置数据 — 每一行是 x,y,z，导入 Excel 画图</td></tr>
+  <tr><td><span class="inline">bag_hover_rpm.txt</span></td><td>RPM 数据 — 画电机转速曲线</td></tr>
+  </table>
+</div>
+
+<!-- ====== 一键跑完所有场景 ====== -->
+<h2>⚡ 一键脚本（录齐全部 6 个场景）</h2>
+<div class="card">
+  <p>如果你觉得一个个开终端太麻烦，把下面整段复制粘贴进 <strong>一个终端</strong>，它会自动：<br>
+  ① 启动系统 → ② 逐个跑场景 → ③ 每次自动打印结果 → ④ 全部完成后关掉系统。</p>
+  <div class="cmd">#!/bin/bash
+# 一键录齐 6 个验收场景（复制粘贴到终端执行）
+cd /home/astesia/drone_sim_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+echo "=== 场景 1: 悬停 ==="
+ros2 launch drone_bringup no_planner.launch.py &
+sleep 3
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_hover 6
+pkill -9 dynamics_node controller_node map_node planner_node rviz2; sleep 1
+
+echo "=== 场景 2: 目标点 ==="
+ros2 launch drone_bringup no_planner.launch.py &
+sleep 3
+ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 1.5}}}'
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_gotogoal 8
+pkill -9 dynamics_node controller_node map_node planner_node rviz2; sleep 1
+
+echo "=== 场景 4: 避障 ==="
+ros2 launch drone_bringup full.launch.py &
+sleep 5
+ros2 topic pub --once /drone/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.0, y: 1.0, z: 1.5}}}'
+bash src/astesia_drone_sim/drone_bringup/scripts/record_and_analyze.sh bag_obstacle 10
+pkill -9 dynamics_node controller_node map_node planner_node rviz2; sleep 1
+
+echo "=== 全部完成 ==="
+ls -d bag_*/ bag_*_odom.txt bag_*_rpm.txt</div>
+</div>
+<p style="margin-top:16px;text-align:center;color:#8b949e">
+  report/report.md · ai_usage.md · GitHub: <a href="https://github.com/bestastesia/astesia_drone_sim">bestastesia/astesia_drone_sim</a>
+</p>
+</div>
+</body>
+</html>
