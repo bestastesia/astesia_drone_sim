@@ -9,5 +9,5 @@ drone_planner:
     cruise_altitude: 1.5
     replan_rate: 1.0         # Hz
     lookahead: 0.5           # 前视距离 m
-    advance_tol: 0.3         # 到达容差 m
+    advance_tol: 0.15        # 到达容差 m（收紧：更贴航点，减少惯性曲线）
     grid_frame: "map"

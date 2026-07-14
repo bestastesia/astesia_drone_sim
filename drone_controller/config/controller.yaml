@@ -5,17 +5,17 @@ drone_controller:
     arm_length: 0.2
     k_F: 1.0
     k_M: 0.05
-    Kp_pos: [2.5, 2.5, 4.0]
-    Kd_pos: [2.2, 2.2, 2.8]
+    Kp_pos: [3.5, 3.5, 5.0]
+    Kd_pos: [4.0, 4.0, 5.0]
     Ki_pos: [0.0, 0.0, 0.0]
     Ki_max: 1.0
-    a_xy_max: 4.0
+    a_xy_max: 6.0
     a_z_min: -3.0
-    a_z_max: 6.0
-    a_max_vec: 8.0
-    d_far: 10.0
-    Kp_att: [8.0, 8.0, 3.0]
-    Kd_rate: [2.0, 2.0, 1.5]
+    a_z_max: 8.0
+    a_max_vec: 10.0
+    d_far: 5.0
+    Kp_att: [12.0, 12.0, 4.0]
+    Kd_rate: [4.0, 4.0, 2.0]
     F_min: 0.0
     F_max: 39.24
     tau_max: 5.0
