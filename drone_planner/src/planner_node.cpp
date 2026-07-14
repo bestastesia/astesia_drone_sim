@@ -168,6 +168,9 @@ class PlannerNode : public rclcpp::Node {
     publishPath(path, z_cruise);
 
     // track path index — 找到离当前位置最近的前方 waypoint
+    // 先钳住：跨 replan 时新路径可能比旧路径短，path_idx_ 会越界
+    if (path_idx_ >= static_cast<int>(path.size()))
+      path_idx_ = 0;
     double best_dist = 1e9; int best_i = path_idx_;
     for (int i = path_idx_; i < static_cast<int>(path.size()); ++i) {
       double d = std::hypot(path[i].x() - px, path[i].y() - py);
