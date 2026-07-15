@@ -30,7 +30,7 @@ lock = threading.Lock()
 # ============================================================================
 class MonitorNode(Node):
     def __init__(self):
-        super().__init__('live_monitor')
+        super().__init__('ground_station')
 
         # /drone/odom — 100Hz
         self.odom_sub = self.create_subscription(
@@ -55,7 +55,10 @@ class MonitorNode(Node):
         # 最小障碍物距离计算定时器 — 10Hz
         self.min_d_timer = self.create_timer(0.1, self._calc_min_d)
 
-        self.get_logger().info('monitor subscriptions ready')
+        # 发布者 — 地面站下发目标点
+        self.goal_pub = self.create_publisher(PoseStamped, '/drone/goal', 10)
+
+        self.get_logger().info('ground station ready — http://localhost:8765')
 
     def _on_odom(self, msg: Odometry):
         x = msg.pose.pose.position.x
@@ -127,11 +130,23 @@ class MonitorNode(Node):
             st['min_d'].append(md)
             st['min_d_t'].append(now)
 
+    # -------- 目标点下发（供 HTTP handler 调用）--------
+    def publish_goal(self, x, y, z):
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.position.x = float(x)
+        msg.pose.position.y = float(y)
+        msg.pose.position.z = float(z)
+        msg.pose.orientation.w = 1.0
+        self.goal_pub.publish(msg)
+        self.get_logger().info(f'goal sent: ({x:.1f}, {y:.1f}, {z:.1f})')
+
 
 # ============================================================================
-# HTTP 服务器 + 内嵌仪表盘 HTML
+# HTTP 服务器 + 内嵌地面站 HTML
 # ============================================================================
-HTML = r'''<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>Drone Monitor</title>
+HTML = r'''<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>Drone Ground Station</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font:13px "Microsoft YaHei","PingFang SC",sans-serif;background:#0d1117;color:#c9d1d9;padding:10px}
@@ -143,25 +158,64 @@ h1{font-size:1.2em;color:#58a6ff;margin-bottom:4px}
 .g{color:#3fb950}.y{color:#d29922}.r{color:#f85149}.c{color:#58a6ff}
 h2{font-size:0.9em;color:#8b949e;margin:8px 0 2px}
 canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bottom:4px;display:block}
+.main{display:flex;gap:8px}.left{flex:1;min-width:0}.right{width:280px;flex-shrink:0}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px;margin-bottom:6px}
+.panel h3{font-size:0.82em;color:#c9d1d9;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #30363d}
+input,select,button{font-size:12px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:5px 7px}
+input[type=number]{width:65px}input[type=range]{width:100%;margin:3px 0;accent-color:#58a6ff}
+button{cursor:pointer}button:hover{background:#21262d}
+.btn-go{background:#238636;border-color:#238636;color:#fff;font-weight:bold;width:100%;padding:8px}
+.btn-go:hover{background:#2ea043}
+.btn-stop{background:#da3633;border-color:#da3633;color:#fff;font-weight:bold;width:100%;padding:8px}
+.btn-stop:hover{background:#f85149}
+.btn-preset{width:48%;margin:1px 0;font-size:11px}
+.row{display:flex;align-items:center;justify-content:space-between;margin:2px 0}
+.row label{font-size:0.72em;color:#8b949e;width:55px;flex-shrink:0}
+.row .val{font-size:0.72em;color:#c9d1d9;width:32px;text-align:right}
+.divider{border-top:1px solid #30363d;margin:6px 0}
+.fb{font-size:0.7em;color:#d29922;margin-top:3px;min-height:1em}
 </style></head><body>
-<h1>&#x1f681; Drone Live Monitor</h1>
+<h1>&#x1f681; Drone Ground Station</h1>
+<div class="main">
+<div class="left">
 <div class="grid">
-<div class="card"><div class="lb">Pos (x,y,z m)</div><div class="vl c" id="p">-</div></div>
-<div class="card"><div class="lb">3D Err (m)</div><div class="vl y" id="pe">-</div></div>
-<div class="card"><div class="lb">Steady Err z</div><div class="vl" id="se">-</div></div>
-<div class="card"><div class="lb">Vel (x,y,z m/s)</div><div class="vl c" id="ve">-</div></div>
-<div class="card"><div class="lb">RPM (FL,FR,BL,BR)</div><div class="vl c" id="rp">-</div></div>
-<div class="card"><div class="lb">MinObsDist (m)</div><div class="vl" id="od">-</div></div>
+<div class="card"><div class="lb">Pos (xyz m)</div><div class="vl c" id="p">-</div></div>
+<div class="card"><div class="lb">3D Err</div><div class="vl y" id="pe">-</div></div>
+<div class="card"><div class="lb">Steady z Err</div><div class="vl" id="se">-</div></div>
+<div class="card"><div class="lb">Vel (xyz)</div><div class="vl c" id="ve">-</div></div>
+<div class="card"><div class="lb">RPM</div><div class="vl c" id="rp">-</div></div>
+<div class="card"><div class="lb">MinObsDist</div><div class="vl" id="od">-</div></div>
 <div class="card"><div class="lb">Overshoot Z</div><div class="vl y" id="os">-</div></div>
-<div class="card"><div class="lb">Path / Time</div><div class="vl c" id="pt">-</div></div>
-<div class="card"><div class="lb">RPM Sat?</div><div class="vl" id="rs">-</div></div>
-<div class="card"><div class="lb">Att Diverge?</div><div class="vl" id="ad">-</div></div>
-<div class="card"><div class="lb">Goal</div><div class="vl c" id="go">-</div></div>
+<div class="card"><div class="lb">Path/Time</div><div class="vl c" id="pt">-</div></div>
+<div class="card"><div class="lb">RPM Sat</div><div class="vl" id="rs">-</div></div>
+<div class="card"><div class="lb">Att Div</div><div class="vl" id="ad">-</div></div>
+<div class="card"><div class="lb">Goal</div><div class="vl c" id="go">-</div></div></div>
+<h2>1. Position Error (ref=0.3m)</h2><canvas id="cpe"></canvas>
+<h2>2. Motor RPM (autoscaled)</h2><canvas id="crp"></canvas>
+<h2>3. XY Trajectory</h2><canvas id="ctj"></canvas>
+<h2>4. Obstacle Distances (ref=0.4m)</h2><canvas id="cmd"></canvas>
 </div>
-<h2>1. Position Error |pos - goal| (x=green z=blue, ref=0.3m dashed)</h2><canvas id="cpe"></canvas>
-<h2>2. Motor RPM (autoscaled, FL green, FR blue, BL yellow, BR gray, ref=0)</h2><canvas id="crp"></canvas>
-<h2>3. XY Trajectory (green=actual, cyan=goal, red dots=obstacles)</h2><canvas id="ctj"></canvas>
-<h2>4. Obstacle Distances (thin colored=per-obstacle, thick green=min, red dashed=0.4m safety)</h2><canvas id="cmd"></canvas>
+<div class="right">
+<div class="panel"><h3>&#x1f3af; Send Goal</h3>
+<div class="row"><label>x (m)</label><input type="number" id="gx" value="2.0" step="0.1"></div>
+<div class="row"><label>y (m)</label><input type="number" id="gy" value="1.0" step="0.1"></div>
+<div class="row"><label>z (m)</label><input type="number" id="gz" value="1.5" step="0.1"></div>
+<button class="btn-go" onclick="sendGoal()">&#x1f680; Send Goal</button>
+<div class="fb" id="goal-fb"></div>
+<div class="divider"></div>
+<button class="btn-preset" onclick="preset('home')">&#x1f3e0; Home</button>
+<button class="btn-preset" onclick="preset('targetA')">&#x1f3af; (2,1,1.5)</button>
+<button class="btn-preset" onclick="preset('square')">&#x25a1; (2,2,1.5)</button>
+<button class="btn-preset" onclick="preset('up')">&#x2b06; (0,0,3)</button></div>
+<div class="panel"><h3>&#x2699; Controller Tuning</h3>
+<div id="sliders"></div>
+<button onclick="applyParams()" style="width:100%;margin-top:4px;background:#1f6feb;color:#fff;font-weight:bold">Apply All</button>
+<div class="fb" id="param-fb"></div></div>
+<div class="panel"><h3>&#x1f6d1; Emergency</h3>
+<button class="btn-stop" onclick="emergency('stop')">&#x1f6d1; STOP MOTORS</button>
+<button onclick="emergency('hover')" style="width:100%;margin-top:4px;background:#d29922;color:#000;font-weight:bold">&#x1f3e0; Return to Origin</button>
+<div class="fb" id="emerg-fb"></div></div>
+</div></div>
 <script>
 var CL=['#3fb950','#58a6ff','#d29922','#c9d1d9'];
 var HOV_Z=1.5;
@@ -201,6 +255,14 @@ function chart(id,series,ylab,ymin,ymax,ref){
     }
   }
 }
+
+var PRESETS={home:{x:0,y:0,z:1.5},targetA:{x:2,y:1,z:1.5},square:{x:2,y:2,z:1.5},up:{x:0,y:0,z:3}};
+function preset(n){var p=PRESETS[n];if(!p)return;document.getElementById('gx').value=p.x;document.getElementById('gy').value=p.y;document.getElementById('gz').value=p.z;sendGoal()}
+function sendGoal(){var x=parseFloat(document.getElementById('gx').value)||0;var y=parseFloat(document.getElementById('gy').value)||0;var z=parseFloat(document.getElementById('gz').value)||1.5;var fb=document.getElementById('goal-fb');fb.textContent='sending...';fetch('/goal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y,z:z})}).then(function(r){return r.json()}).then(function(j){fb.textContent=j.ok?'sent ('+x.toFixed(1)+','+y.toFixed(1)+','+z.toFixed(1)+')':'FAIL: '+j.error;setTimeout(function(){fb.textContent=''},3000)}).catch(function(e){fb.textContent='ERROR: '+e})}
+function emergency(a){var fb=document.getElementById('emerg-fb');fb.textContent='sending...';fetch('/emergency',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})}).then(function(r){return r.json()}).then(function(j){fb.textContent=j.ok?'done: '+a:'FAIL: '+j.error;setTimeout(function(){fb.textContent=''},3000)}).catch(function(e){fb.textContent='ERROR: '+e})}
+var PARAMS={'Kp_pos.x':{min:0.1,max:10,step:0.1,def:2.0},'Kp_pos.z':{min:0.5,max:15,step:0.1,def:3.0},'Kd_pos.x':{min:0,max:6,step:0.1,def:2.0},'Kd_pos.z':{min:0,max:8,step:0.1,def:2.4},'Kp_att.x':{min:1,max:30,step:0.5,def:8},'Kd_rate.x':{min:0.1,max:5,step:0.1,def:0.8},'a_xy_max':{min:1,max:12,step:0.5,def:4.0},'a_z_max':{min:1,max:15,step:0.5,def:6.0}};
+(function(){var h='';for(var k in PARAMS){var p=PARAMS[k];var id='sl_'+k.replace(/\./g,'_');h+='<div class=row><label>'+k+'</label><span class=val id=sv_'+k.replace(/\./g,'_')+'>'+p.def.toFixed(1)+'</span></div>';h+='<input type=range id='+id+' min='+p.min+' max='+p.max+' step='+p.step+' value='+p.def+' oninput="var e=document.getElementById(\'sv_'+k.replace(/\./g,'_')+'\');var s=document.getElementById(\''+id+'\');if(e&&s)e.textContent=parseFloat(s.value).toFixed(1)">'}document.getElementById('sliders').innerHTML=h})();
+function applyParams(){var fb=document.getElementById('param-fb');var jobs=[];for(var k in PARAMS){var el=document.getElementById('sl_'+k.replace(/\./g,'_'));if(el)jobs.push({node:'/drone_controller',param:k,value:parseFloat(el.value)})}if(!jobs.length)return;fb.textContent='applying '+jobs.length+' params...';var i=0;function nxt(){if(i>=jobs.length){fb.textContent='done!';setTimeout(function(){fb.textContent=''},3000);return}var p=jobs[i];fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}).then(function(r){return r.json()}).then(function(j){if(!j.ok)fb.textContent='FAIL: '+p.param;i++;nxt()}).catch(function(e){fb.textContent='ERROR: '+e})}nxt()}
 
 function update(){
   fetch('/data').then(function(r){return r.json()}).then(function(d){
@@ -381,6 +443,80 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    # -------- POST --------
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode() if length else '{}'
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._json_resp(400, {'ok': False, 'error': 'invalid JSON'})
+            return
+        if self.path == '/goal':
+            self._handle_goal(data)
+        elif self.path == '/emergency':
+            self._handle_emergency(data)
+        elif self.path == '/param':
+            self._handle_param(data)
+        else:
+            self._json_resp(404, {'ok': False, 'error': 'unknown endpoint'})
+
+    def _json_resp(self, code, obj):
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(obj).encode())
+
+    def _handle_goal(self, data):
+        x = float(data.get('x', 0)); y = float(data.get('y', 0))
+        z = float(data.get('z', 1.5))
+        if z < 0.5: z = 1.5
+        try:
+            if Handler.node:
+                Handler.node.publish_goal(x, y, z)
+            self._json_resp(200, {'ok': True})
+        except Exception as e:
+            self._json_resp(500, {'ok': False, 'error': str(e)})
+
+    def _handle_emergency(self, data):
+        action = data.get('action', '')
+        try:
+            if action == 'stop':
+                subprocess.run(
+                    ['ros2','topic','pub','--once','/drone/motor_rpm_cmd',
+                     'std_msgs/msg/Float32MultiArray','{data: [0,0,0,0]}'],
+                    capture_output=True, timeout=3)
+            elif action == 'hover':
+                if Handler.node:
+                    Handler.node.publish_goal(0, 0, 1.5)
+            else:
+                self._json_resp(400, {'ok': False, 'error': f'unknown action: {action}'})
+                return
+            self._json_resp(200, {'ok': True})
+        except Exception as e:
+            self._json_resp(500, {'ok': False, 'error': str(e)})
+
+    def _handle_param(self, data):
+        node_name = data.get('node', '/drone_controller')
+        param = data.get('param', '')
+        value = data.get('value')
+        if not param or value is None:
+            self._json_resp(400, {'ok': False, 'error': 'missing param or value'})
+            return
+        try:
+            val_str = 'true' if isinstance(value, bool) and value else ('false' if isinstance(value, bool) else str(value))
+            r = subprocess.run(
+                ['ros2','param','set',node_name, param, val_str],
+                capture_output=True, text=True, timeout=5)
+            ok = r.returncode == 0
+            self._json_resp(200 if ok else 500, {
+                'ok': ok, 'param': param, 'value': value,
+                'stdout': r.stdout.strip(),
+                'stderr': r.stderr.strip() if not ok else '',
+            })
+        except Exception as e:
+            self._json_resp(500, {'ok': False, 'error': str(e)})
+
     def log_message(self, *args):
         pass
 
@@ -411,7 +547,6 @@ def save_csv():
 
 
 def _kill_port(port):
-    """Force-kill any process holding the given port."""
     try:
         subprocess.run(['fuser', '-k', f'{port}/tcp'],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -420,7 +555,6 @@ def _kill_port(port):
 
 
 def main():
-    # 启动前强制释放端口（多次尝试）
     for _ in range(3):
         _kill_port(8765)
         time.sleep(0.2)
@@ -428,13 +562,14 @@ def main():
 
     rclpy.init(args=sys.argv)
     node = MonitorNode()
+    Handler.node = node
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
 
     ros_thread = threading.Thread(target=executor.spin, daemon=True)
     ros_thread.start()
 
-    print('live_monitor (rclpy): http://localhost:8765  |  Ctrl+C to exit & save CSV')
+    print('Ground Station: http://localhost:8765  |  Ctrl+C to exit & save CSV')
 
     # HTTP 服务器
     try:
