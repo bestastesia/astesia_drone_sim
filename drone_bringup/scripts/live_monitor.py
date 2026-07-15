@@ -76,81 +76,66 @@ def r_goal():
             a=b=c=None
 
 def r_obs():
-    p = sp.Popen(['ros2','topic','echo','/map/obstacles','--field','pose.position','--field','scale'],
-                  stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
-    markers = []; cx=cy=cz=sx=sy=sz=None
-    for L in p.stdout:
-        L=L.strip()
-        if L=='' and cx is not None and sx is not None:
-            rv = max(abs(sx),abs(sy),abs(sz)) if abs(sy)>0.01 else abs(sx)
-            markers.append((cx,cy,cz,rv))
-            cx=cy=cz=sx=sy=sz=None; continue
-        if L=='---':
-            if markers: 
-                with lk:
-                    if not st.get('_obs_dbg', False):
-                        st['_obs_dbg'] = True
-                        print('r_obs: %d markers captured from /map/obstacles' % len(markers))
-                    st['obs'] = list(markers)
-            markers = []; cx=cy=cz=sx=sy=sz=None; continue
+    '''每 2 秒轮询一次 /map/obstacles --once，完整解析整个 MarkerArray'''
+    while st['run']:
+        markers = []
         try:
-            if L.startswith('x:'):
-                v=float(L.split(':')[1])
-                if cx is None: cx=v
-                elif sx is None: sx=v
-            elif L.startswith('y:'):
-                v=float(L.split(':')[1])
-                if cy is None: cy=v
-                elif sy is None: sy=v
-            elif L.startswith('z:'):
-                v=float(L.split(':')[1])
-                if cz is None: cz=v
-                elif sz is None: sz=v
+            r = sp.run(['ros2','topic','echo','/map/obstacles','--once'],
+                        capture_output=True, text=True, timeout=5)
+            x=y=z=sx=sy=sz=None; state=0
+            for L in r.stdout.split('\n'):
+                L = L.rstrip()
+                if L.startswith('- header:') or L.startswith('- '):
+                    if x is not None and sx is not None:
+                        rv = max(abs(sx), abs(sy or 0), abs(sz or 0))
+                        markers.append((x, y, z, rv))
+                    x=y=z=sx=sy=sz=None; state = 0; continue
+                if L == '    position:': state = 1; continue
+                if L == '  scale:': state = 2; continue
+                if L.startswith('    orientation:') or L.startswith('  color:') or L.startswith('  lifetime:') or L.startswith('  pose:'):
+                    state = 0; continue
+                try:
+                    if state == 1:
+                        if L.startswith('      x:'): x = float(L.split(':')[1])
+                        elif L.startswith('      y:'): y = float(L.split(':')[1])
+                        elif L.startswith('      z:'): z = float(L.split(':')[1])
+                    elif state == 2:
+                        if L.startswith('    x:'): sx = float(L.split(':')[1])
+                        elif L.startswith('    y:'): sy = float(L.split(':')[1])
+                        elif L.startswith('    z:'): sz = float(L.split(':')[1])
+                except: pass
+            # last marker
+            if x is not None and sx is not None:
+                rv = max(abs(sx), abs(sy or 0), abs(sz or 0))
+                markers.append((x, y, z, rv))
         except: pass
+        if markers:
+            with lk: st['obs'] = list(markers)
+        time.sleep(2.0)
 
 def r_min():
     while st['run']:
-        time.sleep(0.2)
+        time.sleep(0.15)
         with lk:
-            if not st['px']: continue
-            x=st['px'][-1]; y=st['py'][-1]; z=st['pz'][-1]
-        if not x: continue
-        # 实时从 YAML 文件读取障碍物配置
-        obs_list = []
-        try:
-            import yaml
-            for pfx in ['', '/home/astesia/drone_sim_ws/install/drone_map/share/drone_map/config/',
-                         '/home/astesia/drone_sim_ws/src/astesia_drone_sim/drone_map/config/']:
-                try:
-                    path = pfx + 'map.yaml'
-                    with open(path) as f:
-                        cfg = yaml.safe_load(f)
-                    break
-                except: continue
-            params = cfg.get('drone_map',{}).get('ros__parameters',{})
-            for obs_str in params.get('obstacles',[]):
-                parts = obs_str.split()
-                if not parts: continue
-                shape = parts[0]
-                cx,cy,cz = float(parts[1]),float(parts[2]),float(parts[3])
-                r = float(parts[4])
-                if shape == 'sphere':   obs_list.append((cx,cy,cz,r))
-                elif shape == 'cylinder': obs_list.append((cx,cy,cz,r))
-                elif shape == 'cube':   obs_list.append((cx,cy,cz,float(parts[4])))
-        except: pass
-        # fallback: parse from ros2 topic echo
-        # 显式模式无数据或 procedural 时用默认障碍物集
-        if not obs_list:
-            obs_list = [
-                (0.7,0.3,1.5,0.35),(1.0,0.5,1.5,0.35),(1.3,0.5,1.5,0.2),
-                (0.5,0.7,1.0,0.25),(0.8,-0.2,1.5,0.2),(0.4,0.0,1.5,0.3)]
-        md = 1e9
-        for o in obs_list:
-            d = math.sqrt((x-o[0])**2 + (y-o[1])**2 + (z-o[2])**2) - o[3]
-            if d < md: md = d
+            if not st['px'] or len(st['px']) == 0:
+                continue
+            px_v = st['px'][-1]
+            py_v = st['py'][-1]
+            pz_v = st['pz'][-1]
+            obs = list(st.get('obs', []))
+        if not obs:
+            continue
+        all_d = []
+        for o in obs:
+            d = math.sqrt((px_v-o[0])**2 + (py_v-o[1])**2 + (pz_v-o[2])**2) - o[3]
+            all_d.append(max(0, d))
+        md = min(all_d)
         with lk:
-            st['min_d'].append(max(0, md))
+            st['min_d'].append(md)
             st['min_d_t'].append(time.time()-st['start'])
+            st['all_d'] = all_d
+
+
 
 HTML = r'''<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>Drone Monitor</title>
 <style>
