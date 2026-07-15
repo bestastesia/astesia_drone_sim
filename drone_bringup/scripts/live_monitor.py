@@ -1,142 +1,136 @@
-#!/usr/bin/env python3
-"""live_monitor — http://localhost:8765 | Ctrl+C=CSV"""
-import subprocess as sp, threading as th, time, json, math, os, sys, socket, re
-import yaml
+#!/usr/bin/python3
+"""live_monitor — rclpy 原生订阅版，http://localhost:8765 | Ctrl+C 退出并保存 CSV"""
+import sys, os, time, json, math, signal, threading, socket, subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-st = {'t':[],'px':[],'py':[],'pz':[],'vx':[],'vy':[],'vz':[],
-      'rpm':[[],[],[],[]],'rpm_t':[],'goal_x':0,'goal_y':0,'goal_z':1.5,
-      'obs':[],'min_d':[],'min_d_t':[],'start':time.time(),'run':True}
-lk = th.Lock()
-SF = "dashboard_log.csv"
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import PoseStamped
+from visualization_msgs.msg import MarkerArray
 
-def sh(c):
-    return sp.run(['/bin/bash','-c',c], capture_output=True, text=True, timeout=8)
 
-def r_odom():
-    p = sp.Popen(['ros2','topic','echo','/drone/odom'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
-    x=y=z=None; inp=False
-    for L in p.stdout:
-        L=L.strip()
-        if L.startswith('position:'): inp=True; continue
-        if L.startswith('orientation:') or L=='---': inp=False; continue
-        if not inp: continue
-        try:
-            if L.startswith('x:'): x=float(L.split(':')[1])
-            elif L.startswith('y:'): y=float(L.split(':')[1])
-            elif L.startswith('z:'): z=float(L.split(':')[1])
-        except: continue
-        if x is not None and y is not None and z is not None:
-            with lk:
-                st['px'].append(x); st['py'].append(y); st['pz'].append(z)
-                st['t'].append(time.time()-st['start'])
-            x=y=z=None
+# ============================================================================
+# 共享状态
+# ============================================================================
+st = {
+    't': [], 'px': [], 'py': [], 'pz': [],
+    'vx': [], 'vy': [], 'vz': [],
+    'rpm': [[], [], [], []], 'rpm_t': [],
+    'goal_x': 0.0, 'goal_y': 0.0, 'goal_z': 1.5,
+    'obs': [], 'min_d': [], 'min_d_t': [], 'all_d': [],
+    'start': time.time(), 'run': True,
+}
+lock = threading.Lock()
 
-def r_vel():
-    p = sp.Popen(['ros2','topic','echo','/drone/odom','--field','twist.twist.linear'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
-    a=b=c=None
-    for L in p.stdout:
-        L=L.strip()
-        try:
-            if L.startswith('x:'): a=float(L.split(':')[1])
-            elif L.startswith('y:'): b=float(L.split(':')[1])
-            elif L.startswith('z:'): c=float(L.split(':')[1])
-        except: continue
-        if a is not None and b is not None and c is not None:
-            with lk:
-                st['vx'].append(a); st['vy'].append(b); st['vz'].append(c)
-                while len(st['vx'])>len(st['px']): st['vx'].pop(); st['vy'].pop(); st['vz'].pop()
-            a=b=c=None
+# ============================================================================
+# ROS2 订阅节点
+# ============================================================================
+class MonitorNode(Node):
+    def __init__(self):
+        super().__init__('live_monitor')
 
-def r_rpm():
-    p = sp.Popen(['ros2','topic','echo','/drone/motor_rpm_cmd','--field','data'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
-    for L in p.stdout:
-        m = re.search(r'\[(.*?)\]', L.strip())
-        if not m: continue
-        try:
-            v=[float(x.strip()) for x in m.group(1).split(',')]
-            if len(v)==4:
-                with lk:
-                    for i in range(4): st['rpm'][i].append(v[i])
-                    st['rpm_t'].append(time.time()-st['start'])
-        except: pass
+        # /drone/odom — 100Hz
+        self.odom_sub = self.create_subscription(
+            Odometry, '/drone/odom',
+            self._on_odom, rclpy.qos.qos_profile_sensor_data)
 
-def r_goal():
-    p = sp.Popen(['ros2','topic','echo','/drone/goal','--field','pose.position'], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
-    a=b=c=None
-    for L in p.stdout:
-        L=L.strip()
-        try:
-            if L.startswith('x:'): a=float(L.split(':')[1])
-            elif L.startswith('y:'): b=float(L.split(':')[1])
-            elif L.startswith('z:'): c=float(L.split(':')[1])
-        except: continue
-        if a is not None and b is not None and c is not None:
-            with lk: st['goal_x']=a; st['goal_y']=b; st['goal_z']=c
-            a=b=c=None
+        # /drone/motor_rpm_cmd — 200Hz
+        self.rpm_sub = self.create_subscription(
+            Float32MultiArray, '/drone/motor_rpm_cmd',
+            self._on_rpm, rclpy.qos.qos_profile_sensor_data)
 
-def r_obs():
-    '''每 2 秒轮询一次 /map/obstacles --once，完整解析整个 MarkerArray'''
-    while st['run']:
+        # /drone/goal — low rate (topic pub --once or rviz click)
+        self.goal_sub = self.create_subscription(
+            PoseStamped, '/drone/goal',
+            self._on_goal, 10)
+
+        # /map/obstacles — 1Hz
+        self.obs_sub = self.create_subscription(
+            MarkerArray, '/map/obstacles',
+            self._on_obs, 10)
+
+        # 最小障碍物距离计算定时器 — 10Hz
+        self.min_d_timer = self.create_timer(0.1, self._calc_min_d)
+
+        self.get_logger().info('monitor subscriptions ready')
+
+    def _on_odom(self, msg: Odometry):
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        z = msg.pose.pose.position.z
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        vz = msg.twist.twist.linear.z
+        now = time.time() - st['start']
+        with lock:
+            st['px'].append(x)
+            st['py'].append(y)
+            st['pz'].append(z)
+            st['t'].append(now)
+            st['vx'].append(vx)
+            st['vy'].append(vy)
+            st['vz'].append(vz)
+
+    def _on_rpm(self, msg: Float32MultiArray):
+        if len(msg.data) < 4:
+            return
+        now = time.time() - st['start']
+        with lock:
+            st['rpm_t'].append(now)
+            for i in range(4):
+                st['rpm'][i].append(float(msg.data[i]))
+
+    def _on_goal(self, msg: PoseStamped):
+        z = msg.pose.position.z
+        if z < 0.5:
+            z = 1.5
+        with lock:
+            st['goal_x'] = msg.pose.position.x
+            st['goal_y'] = msg.pose.position.y
+            st['goal_z'] = z
+
+    def _on_obs(self, msg: MarkerArray):
         markers = []
-        try:
-            r = sp.run(['ros2','topic','echo','/map/obstacles','--once'],
-                        capture_output=True, text=True, timeout=5)
-            x=y=z=sx=sy=sz=None; state=0
-            for L in r.stdout.split('\n'):
-                L = L.rstrip()
-                if L.startswith('- header:') or L.startswith('- '):
-                    if x is not None and sx is not None:
-                        rv = max(abs(sx), abs(sy or 0), abs(sz or 0))
-                        markers.append((x, y, z, rv))
-                    x=y=z=sx=sy=sz=None; state = 0; continue
-                if L == '    position:': state = 1; continue
-                if L == '  scale:': state = 2; continue
-                if L.startswith('    orientation:') or L.startswith('  color:') or L.startswith('  lifetime:') or L.startswith('  pose:'):
-                    state = 0; continue
-                try:
-                    if state == 1:
-                        if L.startswith('      x:'): x = float(L.split(':')[1])
-                        elif L.startswith('      y:'): y = float(L.split(':')[1])
-                        elif L.startswith('      z:'): z = float(L.split(':')[1])
-                    elif state == 2:
-                        if L.startswith('    x:'): sx = float(L.split(':')[1])
-                        elif L.startswith('    y:'): sy = float(L.split(':')[1])
-                        elif L.startswith('    z:'): sz = float(L.split(':')[1])
-                except: pass
-            # last marker
-            if x is not None and sx is not None:
-                rv = max(abs(sx), abs(sy or 0), abs(sz or 0))
-                markers.append((x, y, z, rv))
-        except: pass
-        if markers:
-            with lk: st['obs'] = list(markers)
-        time.sleep(2.0)
-
-def r_min():
-    while st['run']:
-        time.sleep(0.15)
-        with lk:
-            if not st['px'] or len(st['px']) == 0:
+        for m in msg.markers:
+            if m.action == m.DELETE or m.ns != 'obstacles':
                 continue
-            px_v = st['px'][-1]
-            py_v = st['py'][-1]
-            pz_v = st['pz'][-1]
-            obs = list(st.get('obs', []))
+            # XY 平面外接圆半径：仅取 scale.x/scale.y 最大值*0.5
+            # 不用 scale.z（对圆柱体是高度，远大于半径，会导致 XY 图暴大）
+            r = max(abs(m.scale.x), abs(m.scale.y)) * 0.5
+            markers.append((m.pose.position.x, m.pose.position.y,
+                            m.pose.position.z, r))
+        with lock:
+            st['obs'] = markers
+
+    def _calc_min_d(self):
+        with lock:
+            if not st['px']:
+                return
+            obs = list(st['obs'])
+            px, py, pz = st['px'][-1], st['py'][-1], st['pz'][-1]
+
         if not obs:
-            continue
+            return
+
         all_d = []
-        for o in obs:
-            d = math.sqrt((px_v-o[0])**2 + (py_v-o[1])**2 + (pz_v-o[2])**2) - o[3]
-            all_d.append(max(0, d))
+        for (ox, oy, oz, or_) in obs:
+            d = math.sqrt((px - ox)**2 + (py - oy)**2 + (pz - oz)**2) - or_
+            all_d.append(max(0.0, d))
+
         md = min(all_d)
-        with lk:
-            st['min_d'].append(md)
-            st['min_d_t'].append(time.time()-st['start'])
+        now = time.time() - st['start']
+        with lock:
             st['all_d'] = all_d
+            st['min_d'].append(md)
+            st['min_d_t'].append(now)
 
 
-
+# ============================================================================
+# HTTP 服务器 + 内嵌仪表盘 HTML
+# ============================================================================
 HTML = r'''<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>Drone Monitor</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -148,9 +142,9 @@ h1{font-size:1.2em;color:#58a6ff;margin-bottom:4px}
 .card .vl{font-size:1.1em;font-weight:bold}
 .g{color:#3fb950}.y{color:#d29922}.r{color:#f85149}.c{color:#58a6ff}
 h2{font-size:0.9em;color:#8b949e;margin:8px 0 2px}
-canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bottom:4px}
+canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bottom:4px;display:block}
 </style></head><body>
-<h1>Drone</h1>
+<h1>&#x1f681; Drone Live Monitor</h1>
 <div class="grid">
 <div class="card"><div class="lb">Pos (x,y,z m)</div><div class="vl c" id="p">-</div></div>
 <div class="card"><div class="lb">3D Err (m)</div><div class="vl y" id="pe">-</div></div>
@@ -159,35 +153,43 @@ canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bott
 <div class="card"><div class="lb">RPM (FL,FR,BL,BR)</div><div class="vl c" id="rp">-</div></div>
 <div class="card"><div class="lb">MinObsDist (m)</div><div class="vl" id="od">-</div></div>
 <div class="card"><div class="lb">Overshoot Z</div><div class="vl y" id="os">-</div></div>
-<div class="card"><div class="lb">Path/Time</div><div class="vl c" id="pt">-</div></div>
+<div class="card"><div class="lb">Path / Time</div><div class="vl c" id="pt">-</div></div>
 <div class="card"><div class="lb">RPM Sat?</div><div class="vl" id="rs">-</div></div>
 <div class="card"><div class="lb">Att Diverge?</div><div class="vl" id="ad">-</div></div>
 <div class="card"><div class="lb">Goal</div><div class="vl c" id="go">-</div></div>
 </div>
-<h2>1. Err(t)=|pos-goal| (x=green z=blue, y=0-3m, ref=0.3m)</h2><canvas id="cpe"></canvas>
-<h2>2. RPM (FL/FR/BL/BR, y=0-50)</h2><canvas id="crp"></canvas>
-<h2>3. XY Trajectory (green=actual, bbox=[-1,4])</h2><canvas id="ctj"></canvas>
-<h2>4. Obstacle Distances (all obstacles, red=0.4m safety, thick=min)</h2><canvas id="cmd"></canvas>
+<h2>1. Position Error |pos - goal| (x=green z=blue, ref=0.3m dashed)</h2><canvas id="cpe"></canvas>
+<h2>2. Motor RPM (autoscaled, FL green, FR blue, BL yellow, BR gray, ref=0)</h2><canvas id="crp"></canvas>
+<h2>3. XY Trajectory (green=actual, cyan=goal, red dots=obstacles)</h2><canvas id="ctj"></canvas>
+<h2>4. Obstacle Distances (thin colored=per-obstacle, thick green=min, red dashed=0.4m safety)</h2><canvas id="cmd"></canvas>
 <script>
 var CL=['#3fb950','#58a6ff','#d29922','#c9d1d9'];
 var HOV_Z=1.5;
 
 function chart(id,series,ylab,ymin,ymax,ref){
-  var c=document.getElementById(id);
+  var c=document.getElementById(id); if(!c)return;
   c.width=Math.max(500,c.parentElement.clientWidth-24);
   c.height=220;
   var w=c.width,h=c.height,ctx=c.getContext('2d');
   ctx.clearRect(0,0,w,h);
+  // grid
   ctx.strokeStyle='#21262d';ctx.lineWidth=1;
   for(var i=0;i<=4;i++){var y=h*i/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
   for(var i=0;i<=10;i++){var x=w*i/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  // y-axis labels
+  ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';
+  for(var i=0;i<=4;i++){ctx.fillText((ymax-(ymax-ymin)*i/4).toFixed(1),2,h*i/4+10)}
+  ctx.fillStyle='#58a6ff';ctx.fillText(ylab,4,12);
+  // reference line
   if(ref!==undefined&&ref!==null){
-    ctx.setLineDash([4,6]);ctx.strokeStyle='#f85149';ctx.lineWidth=1.5;
+    ctx.save();ctx.setLineDash([4,6]);ctx.strokeStyle='#f85149';ctx.lineWidth=1.5;
     var ry=h-(ref-ymin)/(ymax-ymin)*h;ctx.beginPath();ctx.moveTo(0,ry);ctx.lineTo(w,ry);ctx.stroke();
-    ctx.setLineDash([]);ctx.fillStyle='#f85149';ctx.font='10px sans-serif';ctx.fillText(ref.toFixed(2),4,ry-4);
+    ctx.restore();ctx.fillStyle='#f85149';ctx.font='10px sans-serif';ctx.fillText(ref.toFixed(2),4,ry-4);
   }
-  if(!series||!series[0]||!series[0].length){ctx.fillStyle='#8b949e';ctx.fillText('...',w/2-10,h/2)}
-  else {
+  // data lines
+  if(!series||!series[0]||!series[0].length){
+    ctx.fillStyle='#8b949e';ctx.font='13px sans-serif';ctx.fillText('waiting...',w/2-30,h/2);
+  } else {
     for(var si=0;si<series.length;si++){
       ctx.strokeStyle=CL[si%4];ctx.lineWidth=1.6;ctx.beginPath();
       var s=series[si];
@@ -198,9 +200,6 @@ function chart(id,series,ylab,ymin,ymax,ref){
       ctx.stroke();
     }
   }
-  ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';
-  for(var i=0;i<=4;i++){ctx.fillText((ymax-(ymax-ymin)*i/4).toFixed(1),2,h*i/4+10)}
-  ctx.fillStyle='#58a6ff';ctx.fillText(ylab,4,12);
 }
 
 function update(){
@@ -208,83 +207,159 @@ function update(){
     if(!d.t||!d.t.length)return;
     var n=d.t.length; HOV_Z=d.goal_z||1.5;
     var px=d.px[n-1],py=d.py[n-1],pz=d.pz[n-1];
+
+    // status cards
     document.getElementById('p').textContent=px.toFixed(2)+' '+py.toFixed(2)+' '+pz.toFixed(2);
     var e3=Math.sqrt(Math.pow(px-d.goal_x,2)+Math.pow(py-d.goal_y,2)+Math.pow(pz-HOV_Z,2));
     document.getElementById('pe').textContent=e3.toFixed(4)+' m';
     document.getElementById('pe').className='vl '+(e3<0.3?'g':'y');
+
     var n20=Math.max(1,Math.floor(n/5)),se=0;
-    for(var i=n-n20;i<n;i++)se+=Math.abs(d.pz[i]-HOV_Z);
+    for(var i=n-n20;i<n;i++) se+=Math.abs(d.pz[i]-HOV_Z);
     document.getElementById('se').textContent=(se/n20).toFixed(4)+' m';
     document.getElementById('se').className='vl '+((se/n20)<0.3?'g':'r');
+
     var vi=Math.min(d.vx.length,d.vy.length,d.vz.length)-1;
-    if(vi>=0)document.getElementById('ve').textContent=d.vx[vi].toFixed(2)+' '+d.vy[vi].toFixed(2)+' '+d.vz[vi].toFixed(2);
+    if(vi>=0) document.getElementById('ve').textContent=d.vx[vi].toFixed(2)+' '+d.vy[vi].toFixed(2)+' '+d.vz[vi].toFixed(2);
+
     var ri=d.rpm[0].length-1;
-    if(ri>=0)document.getElementById('rp').textContent=d.rpm[0][ri].toFixed(0)+' '+d.rpm[1][ri].toFixed(0)+' '+d.rpm[2][ri].toFixed(0)+' '+d.rpm[3][ri].toFixed(0);
+    if(ri>=0) document.getElementById('rp').textContent=d.rpm[0][ri].toFixed(0)+' '+d.rpm[1][ri].toFixed(0)+' '+d.rpm[2][ri].toFixed(0)+' '+d.rpm[3][ri].toFixed(0);
+
     var mdv=d.min_d.length?d.min_d[d.min_d.length-1]:0;
     document.getElementById('od').textContent=mdv.toFixed(3)+' m';
     document.getElementById('od').className='vl '+(mdv>0.4?'g':(mdv>0.15?'y':'r'));
-    var zmax=-Infinity;for(var i=0;i<n;i++)if(d.pz[i]>zmax)zmax=d.pz[i];
-    document.getElementById('os').textContent=Math.max(0,zmax-HOV_Z).toFixed(4)+' m';
-    var path=0;for(var i=1;i<n;i++){var dx=d.px[i]-d.px[i-1],dy=d.py[i]-d.py[i-1],dz=d.pz[i]-d.pz[i-1];path+=Math.sqrt(dx*dx+dy*dy+dz*dz)}
-    document.getElementById('pt').textContent=path.toFixed(1)+'m/'+(d.t[n-1]).toFixed(1)+'s';
-    document.getElementById('go').textContent=d.goal_x.toFixed(1)+' '+d.goal_y.toFixed(1)+' '+HOV_Z.toFixed(1);
-    var sat=false;for(var i=0;i<4;i++){var rr=d.rpm[i];for(var j=Math.max(0,rr.length-100);j<rr.length;j++)if(rr[j]>=9990||rr[j]<=5){sat=true;break}}
-    document.getElementById('rs').textContent=sat?'YES':'NO';
-    document.getElementById('rs').className='vl '+(sat?'r':'g');
-    var div=false;for(var i=0;i<n;i++)if(d.pz[i]<-100||(d.vx[i]&&Math.hypot(d.vx[i],d.vy[i],d.vz[i])>100))div=true;
-    document.getElementById('ad').textContent=div?'YES':'NO';
-    document.getElementById('ad').className='vl '+(div?'r':'g');
 
+    var zmax=-Infinity;for(var i=0;i<n;i++) if(d.pz[i]>zmax) zmax=d.pz[i];
+    document.getElementById('os').textContent=Math.max(0,zmax-HOV_Z).toFixed(4)+' m';
+
+    var path=0;for(var i=1;i<n;i++) path+=Math.hypot(d.px[i]-d.px[i-1],d.py[i]-d.py[i-1],d.pz[i]-d.pz[i-1]);
+    document.getElementById('pt').textContent=path.toFixed(1)+' m / '+(d.t[n-1]).toFixed(1)+' s';
+
+    document.getElementById('go').textContent=d.goal_x.toFixed(1)+' '+d.goal_y.toFixed(1)+' '+HOV_Z.toFixed(1);
+
+    // RPM saturation: only flag if RPM is truly saturated (>= 9990 or motor stopped at 0)
+    var sat=false;
+    for(var i=0;i<4;i++){
+      var rr=d.rpm[i];
+      if(rr.length<2) continue;
+      for(var j=Math.max(0,rr.length-100);j<rr.length;j++)
+        if(rr[j]>=9990){sat=true;break;}
+    }
+    document.getElementById('rs').textContent=sat?'SATURATED':'OK';
+    document.getElementById('rs').className='vl '+(sat?'r':'g');
+
+    var div=false;
+    for(var i=0;i<n;i++) if(d.pz[i]<-100||(d.vx[i]&&Math.hypot(d.vx[i]||0,d.vy[i]||0,d.vz[i]||0)>100)) div=true;
+    document.getElementById('ad').textContent=div?'DIVERGED':'OK';  document.getElementById('ad').className='vl '+(div?'r':'g');
+
+    // chart 1: position error
     var ex=[],ez=[];
     for(var i=0;i<n;i++){ex.push(Math.abs(d.px[i]-d.goal_x));ez.push(Math.abs(d.pz[i]-HOV_Z))}
-    chart('cpe',[ex,ez],'x=green z=blue',0,3,0.3);
-    chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR',0,50,null);
-    var ads = d.all_d||[];
-    if(ads.length){
-      var c4=document.getElementById('cmd');
-      c4.width=Math.max(500,c4.parentElement.clientWidth-24);
-      c4.height=220;
-      var w4=c4.width,h4=c4.height,ctx4=c4.getContext('2d');
-      ctx4.clearRect(0,0,w4,h4);
-      ctx4.strokeStyle='#21262d';ctx4.lineWidth=1;
-      for(var i=0;i<=4;i++){ctx4.beginPath();ctx4.moveTo(0,h4*i/4);ctx4.lineTo(w4,h4*i/4);ctx4.stroke()}
-      ctx4.setLineDash([4,6]);ctx4.strokeStyle='#f85149';ctx4.lineWidth=1.5;
-      var ry4=h4-0.4/2*h4;ctx4.beginPath();ctx4.moveTo(0,ry4);ctx4.lineTo(w4,ry4);ctx4.stroke();
-      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40m',4,ry4-4);
-      var OBS_COLORS=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7',
-                       '#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa'];
-      for(var k=0;k<ads.length;k++){
-        ctx4.strokeStyle=OBS_COLORS[k % 12];ctx4.lineWidth=1.2;ctx4.beginPath();
-        var y4=h4-ads[k]/2*h4;
-        ctx4.moveTo(0,y4);ctx4.lineTo(w4,y4);ctx4.stroke();
-        ctx4.fillStyle=OBS_COLORS[k % 12];ctx4.font='9px sans-serif';ctx4.fillText(''+k,2,y4-2);
-      }
-        if(d.min_d.length){
-          ctx4.strokeStyle='#3fb950';ctx4.lineWidth=2.8;ctx4.beginPath();
-          for(var i=0;i<d.min_d.length;i++){
-            var x4=i/d.min_d.length*w4,y4=h4-d.min_d[i]/2*h4;
-            i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
-          }
-          ctx4.stroke();ctx4.fillStyle='#3fb950';ctx4.font='10px sans-serif';ctx4.fillText('min',w4-24,12);
+    chart('cpe',[ex,ez],'x err=green  z err=blue  ref=0.3m',0,3,0.3);
+
+    // chart 2: RPM — auto-scale y-axis to actual data range
+    (function(){
+      var allRPM=[];
+      for(var i=0;i<4;i++) allRPM=allRPM.concat(d.rpm[i]);
+      var rpmMin=allRPM.length?Math.min.apply(null,allRPM):0;
+      var rpmMax=allRPM.length?Math.max.apply(null,allRPM):50;
+      // Ensure at least 2 units range so flat lines are visible centered
+      if(rpmMax-rpmMin<2){rpmMin-=1;rpmMax+=1;}
+      rpmMin=Math.max(0,rpmMin);
+      chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR RPM',rpmMin,rpmMax,null);
+    })();
+
+    // chart 3: XY trajectory
+    (function(){
+      var c=document.getElementById('ctj'); if(!c)return;
+      c.width=Math.max(500,c.parentElement.clientWidth-24); c.height=220;
+      var w=c.width,h=c.height,ctx=c.getContext('2d');
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle='#161b22';ctx.fillRect(0,0,w,h);
+      // grid
+      ctx.strokeStyle='#21262d';ctx.lineWidth=1;
+      for(var i=0;i<=4;i++){ctx.beginPath();ctx.moveTo(0,h*i/4);ctx.lineTo(w,h*i/4);ctx.stroke()}
+      for(var i=0;i<=4;i++){ctx.beginPath();ctx.moveTo(w*i/4,0);ctx.lineTo(w*i/4,h);ctx.stroke()}
+      // bbox: bounds x/y [-1,4], y axis inverted
+      function tx(v){return (v-(-1))/5*w}
+      function ty(v){return h-(v-(-1))/5*h}
+      // goal
+      ctx.fillStyle='#58a6ff';ctx.beginPath();ctx.arc(tx(d.goal_x),ty(d.goal_y),5,0,2*Math.PI);ctx.fill();
+      ctx.fillStyle='#58a6ff';ctx.font='10px sans-serif';ctx.fillText('goal',tx(d.goal_x)+8,ty(d.goal_y)-4);
+      // obstacles as filled circles
+      if(d.all_d&&d.obs){
+        var OBS_COL=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7',
+                     '#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa'];
+        for(var k=0;k<d.obs.length;k++){
+          var o=d.obs[k];
+          ctx.fillStyle=OBS_COL[k%12]+'44';
+          ctx.beginPath();
+          var rx=o[3]/5*w, ry=o[3]/5*h;
+          ctx.ellipse(tx(o[0]),ty(o[1]),Math.max(rx,3),Math.max(ry,3),0,0,2*Math.PI);
+          ctx.fill();
+          ctx.fillStyle=OBS_COL[k%12];ctx.font='9px sans-serif';
+          ctx.fillText(k,tx(o[0])+4,ty(o[1])-4);
         }
-        ctx4.fillStyle='#8b949e';ctx4.font='10px sans-serif';
-        for(var i=0;i<=4;i++){ctx4.fillText((2-0.5*i).toFixed(1),2,h4*i/4+10)}
-        ctx4.fillStyle='#58a6ff';ctx4.fillText('obs dist(m) green=min colored=each',4,12);
+      }
+      // drone path
+      ctx.strokeStyle='#3fb950';ctx.lineWidth=2;ctx.beginPath();
+      for(var i=0;i<n;i++){var x=tx(d.px[i]),y=ty(d.py[i]); if(i==0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
+      ctx.stroke();
+      // start marker
+      if(n>0){ctx.fillStyle='#3fb950';ctx.beginPath();ctx.arc(tx(d.px[0]),ty(d.py[0]),4,0,2*Math.PI);ctx.fill();}
+      // current position
+      if(n>0){ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(tx(px),ty(py),5,0,2*Math.PI);ctx.fill();ctx.fillStyle='#fff';ctx.font='10px sans-serif';ctx.fillText('now',tx(px)+8,ty(py)-4);}
+      ctx.fillStyle='#58a6ff';ctx.fillText('XY trajectory  bbox=[-1,4]',4,12);
+    })();
+
+    // chart 4: obstacle distances
+    (function(){
+      var c=document.getElementById('cmd'); if(!c)return;
+      c.width=Math.max(500,c.parentElement.clientWidth-24); c.height=220;
+      var w=c.width,h=c.height,ctx=c.getContext('2d');
+      ctx.clearRect(0,0,w,h);
+      ctx.strokeStyle='#21262d';ctx.lineWidth=1;
+      for(var i=0;i<=4;i++){ctx.beginPath();ctx.moveTo(0,h*i/4);ctx.lineTo(w,h*i/4);ctx.stroke()}
+      // y-axis
+      ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';
+      for(var i=0;i<=4;i++){ctx.fillText((2-0.5*i).toFixed(1),2,h*i/4+10)}
+      // safety ref
+      ctx.save();ctx.setLineDash([4,6]);ctx.strokeStyle='#f85149';ctx.lineWidth=1.5;
+      var ry=h-0.4/2*h;ctx.beginPath();ctx.moveTo(0,ry);ctx.lineTo(w,ry);ctx.stroke();
+      ctx.restore();ctx.fillStyle='#f85149';ctx.font='10px sans-serif';ctx.fillText('0.40m',4,ry-4);
+      // per-obstacle lines
+      var ads=d.all_d||[];
+      if(ads.length){
+        var OBS_COL=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7',
+                     '#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa'];
+        for(var k=0;k<ads.length;k++){
+          ctx.strokeStyle=OBS_COL[k%12]+'88';ctx.lineWidth=1.2;ctx.beginPath();
+          var y4=h-ads[k]/2*h;
+          ctx.moveTo(0,y4);ctx.lineTo(w,y4);ctx.stroke();
+          ctx.fillStyle=OBS_COL[k%12];ctx.font='9px sans-serif';ctx.fillText(''+k,2,y4-2);
+        }
+      }
+      // min distance curve
+      if(d.min_d.length){
+        ctx.strokeStyle='#3fb950';ctx.lineWidth=2.8;ctx.beginPath();
+        for(var i=0;i<d.min_d.length;i++){
+          var x4=i/d.min_d.length*w,y4=h-d.min_d[i]/2*h;
+          i==0?ctx.moveTo(x4,y4):ctx.lineTo(x4,y4);
+        }
+        ctx.stroke();ctx.fillStyle='#3fb950';ctx.font='10px sans-serif';ctx.fillText('min',w-24,12);
+      }
+      ctx.fillStyle='#58a6ff';ctx.fillText('obs dist (m)  green thick=min  ref=0.4m',4,12);
+    })();
+  }).catch(function(e){console.error(e)});
+}
 setInterval(update,500);
+update();
 </script></body></html>'''
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/debug':
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain;charset=utf-8')
-            self.end_headers()
-            with lk:
-                self.wfile.write(('obs_count=%d min_d=%d all_d=%d rpm=%d px=%d' % (
-                    len(st.get('obs',[])), len(st.get('min_d',[])),
-                    len(st.get('all_d',[])), len(st['rpm'][0]) if st.get('rpm') and st['rpm'][0] else 0,
-                    len(st.get('px',[])))).encode())
-        elif self.path == '/':
+        if self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html;charset=utf-8')
             self.end_headers()
@@ -293,58 +368,97 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            with lk:
-                d = {}
-                for k in ['t','px','py','pz','vx','vy','vz','rpm','rpm_t','goal_x','goal_y','goal_z','min_d','min_d_t']:
-                    d[k] = st[k]
-                d['all_d'] = st.get('all_d', [])
-                # 确保 goal 默认值非 0（控制器默认 hover z=1.5）
+            with lock:
+                d = {k: st[k] for k in [
+                    't', 'px', 'py', 'pz', 'vx', 'vy', 'vz',
+                    'rpm', 'rpm_t', 'goal_x', 'goal_y', 'goal_z',
+                    'min_d', 'min_d_t', 'all_d', 'obs',
+                ]}
                 if not d.get('goal_z'):
                     d['goal_z'] = 1.5
-            d['_dbg'] = {
-                'obs_count': len(st.get('obs', [])),
-                'min_d_len': len(st.get('min_d', [])),
-                'all_d_len': len(st.get('all_d', [])),
-                'rpm_len': len(st['rpm'][0]) if st.get('rpm') and st['rpm'][0] else 0,
-                'px_len': len(st.get('px', [])),
-            }
             self.wfile.write(json.dumps(d).encode())
         else:
             self.send_response(404)
             self.end_headers()
-    def log_message(self, *a): pass
+
+    def log_message(self, *args):
+        pass
+
+
+# ============================================================================
+# main
+# ============================================================================
+def save_csv():
+    """退出时保存 CSV"""
+    csv_path = 'dashboard_log.csv'
+    with lock:
+        n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
+        lines = ['t,px,py,pz,vx,vy,vz,rpm0,rpm1,rpm2,rpm3,min_obs_dist']
+        for i in range(n):
+            row = []
+            for k in ['t', 'px', 'py', 'pz']:
+                row.append(str(st[k][i]) if i < len(st[k]) else '')
+            row.append(str(st['vx'][i]) if i < len(st['vx']) else '')
+            row.append(str(st['vy'][i]) if i < len(st['vy']) else '')
+            row.append(str(st['vz'][i]) if i < len(st['vz']) else '')
+            for j in range(4):
+                row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
+            row.append(str(st['min_d'][i]) if i < len(st['min_d']) else '')
+            lines.append(','.join(row))
+    with open(csv_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f'\nSaved {csv_path} ({n} rows)')
+
+
+def _kill_port(port):
+    """Force-kill any process holding the given port."""
+    try:
+        subprocess.run(['fuser', '-k', f'{port}/tcp'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def main():
+    # 启动前强制释放端口（多次尝试）
+    for _ in range(3):
+        _kill_port(8765)
+        time.sleep(0.2)
+    time.sleep(0.3)
+
+    rclpy.init(args=sys.argv)
+    node = MonitorNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+
+    ros_thread = threading.Thread(target=executor.spin, daemon=True)
+    ros_thread.start()
+
+    print('live_monitor (rclpy): http://localhost:8765  |  Ctrl+C to exit & save CSV')
+
+    # HTTP 服务器
+    try:
+        for retry in range(10):
+            try:
+                HTTPServer.allow_reuse_address = True
+                srv = HTTPServer(('0.0.0.0', 8765), Handler)
+                srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.serve_forever()
+                break
+            except OSError:
+                print(f'Port 8765 busy (retry {retry+1}/10)...')
+                _kill_port(8765)
+                time.sleep(0.5)
+        else:
+            print('ERROR: cannot bind port 8765 after 10 retries')
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.cancel()
+        save_csv()
+        node.destroy_node()
+        rclpy.shutdown()
+
 
 if __name__ == '__main__':
-    print('live_monitor: http://localhost:8765 | Ctrl+C=CSV')
-    for t in [th.Thread(target=f, daemon=True) for f in [r_odom, r_vel, r_rpm, r_goal, r_obs, r_min]]:
-        t.start()
-    time.sleep(2)
-
-    # Start HTTP server with port conflict handling
-    for retry in range(3):
-        try:
-            HTTPServer.allow_reuse_address = True
-            srv = HTTPServer(('0.0.0.0', 8765), Handler)
-            srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            srv.serve_forever()
-            break
-        except OSError:
-            time.sleep(1.0)
-            sp.run(['fuser','-k','8765/tcp'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-    else:
-        print('ERROR: could not bind port 8765')
-
-    # Save CSV on exit
-    with lk:
-        with open(SF, 'w') as f:
-            f.write("t,px,py,pz,vx,vy,vz,rpm0,rpm1,rpm2,rpm3,min_obs_dist\n")
-            n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
-            for i in range(n):
-                row = []
-                for k in ['t','px','py','pz']:
-                    row.append(str(st[k][i]) if i < len(st[k]) else '')
-                for j in range(4):
-                    row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
-                row.append(str(st['min_d'][i]) if i < len(st['min_d']) else '')
-                f.write(','.join(row) + '\n')
-    print(f'Saved {SF} ({n} rows)')
+    main()

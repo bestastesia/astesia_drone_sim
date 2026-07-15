@@ -16,8 +16,24 @@ ROS2 Humble 四旋翼无人机仿真器——2027 保研招生编程题（60 分
 7. [规划器参数](#规划器参数)
 8. [录制实验数据](#录制实验数据)
 9. [系统架构](#系统架构)
-10. [目录结构](#目录结构)
+10. [实时监控仪表盘](#实时监控仪表盘)
 11. [常见故障排查](#常见故障排查)
+
+---
+## 目录
+
+1. [系统要求](#系统要求)
+2. [克隆与构建](#克隆与构建)
+3. [一键启动](#一键启动)
+4. [怎么让无人机飞到指定位置](#怎么让无人机飞到指定位置)
+5. [地图与障碍物](#地图与障碍物)
+6. [控制器调参](#控制器调参)
+7. [规划器参数](#规划器参数)
+8. [录制实验数据](#录制实验数据)
+9. [系统架构](#系统架构)
+10. [目录结构](#目录结构)
+11. [实时监控仪表盘](#实时监控仪表盘)
+12. [常见故障排查](#常见故障排查)
 
 ---
 
@@ -165,8 +181,8 @@ ros2 param set /drone_map num_obstacles 10
 
 | 参数 | 默认值 | 含义 | 调大→ |
 |---|---|---|---|
-| `Kp_pos` | [2.5, 2.5, 4.0] | [x, y, z] 位置 P | 更硬地拉向目标 |
-| `Kd_pos` | [2.2, 2.2, 2.8] | [x, y, z] 位置 D | 刹得更快，但太大会抖 |
+| `Kp_pos` | [2.0, 2.0, 3.0] | [x, y, z] 位置 P | 更硬地拉向目标 |
+| `Kd_pos` | [2.0, 2.0, 2.4] | [x, y, z] 位置 D | 刹得更快，但太大会抖 |
 | `a_xy_max` | 4.0 | 水平加速度上限 m/s² | 允许更猛的倾斜 |
 | `a_z_max` | 6.0 | 上升加速度上限 | 更快爬升 |
 | `a_z_min` | -3.0 | 下降加速度上限 | 更快下降 |
@@ -178,7 +194,7 @@ ros2 param set /drone_map num_obstacles 10
 | 参数 | 默认值 | 含义 |
 |---|---|---|
 | `Kp_att` | [8, 8, 3] | [roll, pitch, yaw] 姿态 P |
-| `Kd_rate` | [2, 2, 1.5] | 角速度 D |
+| `Kd_rate` | [0.8, 0.8, 0.7] | 角速度 D |
 
 ### 物理参数（必须和动力学节点一致）
 
@@ -338,8 +354,9 @@ src/astesia_drone_sim/
 │   ├── rviz/drone.rviz         #   RViz 预设配置
 │   ├── scripts/
 │   │   ├── waypoint_sender.py  #   多航点顺序发送
-│   │   ├── record_and_analyze.sh # 录 bag + 自动分析
-│   │   └── plot_bag.py         #   bag → CSV + 数值摘要
+│   │   │   ├── record_and_analyze.sh # 录 bag + 自动分析
+│   │   │   ├── plot_bag.py         #   bag → CSV + 数值摘要
+│   │   │   └── live_monitor.py     #   浏览器实时监控仪表盘
 │   └── report/
 │       ├── report.md           #   技术报告
 │       ├── verification_guide.html # 验收场景录制指南
@@ -348,6 +365,44 @@ src/astesia_drone_sim/
 ├── README.md                   # 本文件
 └── .gitignore
 ```
+
+---
+
+## 实时监控仪表盘
+
+浏览器仪表盘，实时显示位置误差、RPM、轨迹、障碍物距离，无需额外依赖。
+
+### 启动
+
+```bash
+# 终端 1：仿真栈
+ros2 launch drone_bringup full.launch.py
+
+# 终端 2：监控器（⚠️ 不能用 conda 的 python3，必须 source ROS 环境）
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+/usr/bin/python3 src/astesia_drone_sim/drone_bringup/scripts/live_monitor.py
+```
+
+浏览器打开 **http://localhost:8765**。
+
+### 四个图表
+
+| 图表 | 内容 | 验收标准 |
+|---|---|---|
+| 1. Position Error | |x-goal_x| (绿), |z-goal_z| (蓝), 参考线 0.3m | 全部 < 0.3m |
+| 2. Motor RPM | 四轴 RPM（自动缩放）, FL/FR/BL/BR | 悬停时稳定在 ~15 RPM |
+| 3. XY Trajectory | 无人机实际轨迹（绿线）+ 障碍物（彩色圆圈）+ 目标点（蓝点）| 轨迹不穿透障碍物 |
+| 4. Obstacle Distances | 各障碍物距离（彩色细线）+ 最近距离（绿粗线）+ 安全线 0.4m（红虚线）| 最近距离 > 0.4m |
+
+### 状态卡片
+
+- **RPM Sat**: 正常时显示 `OK`（绿），RPM 达到上限时显示 `SATURATED`（红）
+- **Att Diverge**: 正常时显示 `OK`（绿），位置/速度 NaN 时显示 `DIVERGED`（红）
+
+### 退出
+
+`Ctrl+C` 退出，自动保存 `dashboard_log.csv`（含全部时间序列数据，可用 Excel/Python 二次分析）。
 
 ---
 
