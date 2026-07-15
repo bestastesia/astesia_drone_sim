@@ -16,9 +16,11 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 
 #include "drone_dynamics/dynamics.hpp"
+#include "drone_common/noise.hpp"
 
 using drone_common::Vec3d;
 using drone_common::Mat3d;
+using drone_common::ImuNoiseModel;
 using drone_dynamics::DroneDynamics;
 using drone_dynamics::Params;
 using namespace std::chrono_literals;
@@ -46,6 +48,16 @@ public:
     declare_parameter<std::vector<double>>("wind_force", {0.0, 0.0, 0.0});
     declare_parameter<double>("wind_gust_amplitude", 0.0);
     declare_parameter<double>("wind_gust_period", 2.0);
+    declare_parameter<bool>("imu_noise_enabled", false);
+    declare_parameter<double>("accel_noise_density", 0.0);
+    declare_parameter<double>("accel_bias_init", 0.0);
+    declare_parameter<double>("accel_bias_rw", 0.0);
+    declare_parameter<double>("gyro_noise_density", 0.0);
+    declare_parameter<double>("gyro_bias_init", 0.0);
+    declare_parameter<double>("gyro_bias_rw", 0.0);
+    declare_parameter<double>("odom_pos_noise", 0.0);
+    declare_parameter<double>("odom_vel_noise", 0.0);
+    declare_parameter<int64_t>("noise_seed", 12345);
     declare_parameter<std::vector<double>>("init_pose", {0.0,0.0,0.0,0.0});
     declare_parameter<std::string>("frame_id", "map");
 
@@ -53,6 +65,23 @@ public:
     dynamics_ = std::make_unique<DroneDynamics>(p);
     sim_dt_ = p.sim_dt;
     frame_id_ = get_parameter("frame_id").as_string();
+
+    // 噪声模型初始化
+    noise_seed_ = static_cast<uint64_t>(get_parameter("noise_seed").as_int());
+    imu_noise_enabled_ = get_parameter("imu_noise_enabled").as_bool();
+    accel_nd_ = get_parameter("accel_noise_density").as_double();
+    accel_bi_ = get_parameter("accel_bias_init").as_double();
+    accel_brw_ = get_parameter("accel_bias_rw").as_double();
+    gyro_nd_ = get_parameter("gyro_noise_density").as_double();
+    gyro_bi_ = get_parameter("gyro_bias_init").as_double();
+    gyro_brw_ = get_parameter("gyro_bias_rw").as_double();
+    odom_pos_noise_ = get_parameter("odom_pos_noise").as_double();
+    odom_vel_noise_ = get_parameter("odom_vel_noise").as_double();
+    if (imu_noise_enabled_) {
+      imu_noise_ = std::make_unique<ImuNoiseModel>(
+          accel_nd_, accel_bi_, accel_brw_, gyro_nd_, gyro_bi_, gyro_brw_, noise_seed_);
+    }
+    odom_rng_.seed(noise_seed_ + 1);
 
     // RPM 订阅 — 独立 MutuallyExclusive group (不被 1kHz timer 饿死)
     auto sub_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -139,28 +168,47 @@ private:
 
   void pubAll(){
     const auto& s=dynamics_->state(); auto ts=now();
+    Vec3d true_pos(s.p.x(), s.p.y(), s.p.z());
+    Vec3d R_vb = s.q.toRotationMatrix().transpose() * s.v;
+    Vec3d true_vel_body(R_vb.x(), R_vb.y(), R_vb.z());
+    Vec3d true_w_body(s.w_body.x(), s.w_body.y(), s.w_body.z());
+    Mat3d RBW = s.q.toRotationMatrix().transpose();
+    Vec3d az(0, 0, 9.80665);
+    Vec3d true_accel_body = RBW * (s.a_world_last + az);
+
+    // 传感器噪声
+    Vec3d pos_out = true_pos;
+    Vec3d vel_out = true_vel_body;
+    Vec3d accel_out = true_accel_body;
+    Vec3d gyro_out = true_w_body;
+    if (imu_noise_enabled_ && imu_noise_) {
+      accel_out = imu_noise_->corruptAccel(true_accel_body, sim_dt_);
+      gyro_out = imu_noise_->corruptGyro(true_w_body, sim_dt_);
+    }
+    if (odom_pos_noise_ > 0)
+      pos_out = drone_common::addPositionNoise(true_pos, odom_pos_noise_, odom_rng_);
+    if (odom_vel_noise_ > 0)
+      vel_out = drone_common::addVelocityNoise(true_vel_body, odom_vel_noise_, odom_rng_);
+
     nav_msgs::msg::Odometry o;
     o.header.stamp=ts; o.header.frame_id=frame_id_; o.child_frame_id="base_link";
-    o.pose.pose.position.x=s.p.x(); o.pose.pose.position.y=s.p.y(); o.pose.pose.position.z=s.p.z();
+    o.pose.pose.position.x=pos_out.x(); o.pose.pose.position.y=pos_out.y(); o.pose.pose.position.z=pos_out.z();
     o.pose.pose.orientation.x=s.q.x(); o.pose.pose.orientation.y=s.q.y();
     o.pose.pose.orientation.z=s.q.z(); o.pose.pose.orientation.w=s.q.w();
-    Mat3d R=s.q.toRotationMatrix(); Vec3d vb=R.transpose()*s.v;
-    o.twist.twist.linear.x=vb.x(); o.twist.twist.linear.y=vb.y(); o.twist.twist.linear.z=vb.z();
-    o.twist.twist.angular.x=s.w_body.x(); o.twist.twist.angular.y=s.w_body.y(); o.twist.twist.angular.z=s.w_body.z();
+    o.twist.twist.linear.x=vel_out.x(); o.twist.twist.linear.y=vel_out.y(); o.twist.twist.linear.z=vel_out.z();
+    o.twist.twist.angular.x=gyro_out.x(); o.twist.twist.angular.y=gyro_out.y(); o.twist.twist.angular.z=gyro_out.z();
     odom_pub_->publish(o);
 
-    Mat3d RBW=R.transpose();
-    Vec3d az(0,0,9.80665);
-    Vec3d ab=RBW*(s.a_world_last+az);
     sensor_msgs::msg::Imu imu;
     imu.header.stamp=ts; imu.header.frame_id="imu_link";
     imu.orientation=o.pose.pose.orientation;
-    imu.angular_velocity.x=s.w_body.x(); imu.angular_velocity.y=s.w_body.y(); imu.angular_velocity.z=s.w_body.z();
-    imu.linear_acceleration.x=ab.x(); imu.linear_acceleration.y=ab.y(); imu.linear_acceleration.z=ab.z();
+    imu.angular_velocity.x=gyro_out.x(); imu.angular_velocity.y=gyro_out.y(); imu.angular_velocity.z=gyro_out.z();
+    imu.linear_acceleration.x=accel_out.x(); imu.linear_acceleration.y=accel_out.y(); imu.linear_acceleration.z=accel_out.z();
     imu_pub_->publish(imu);
 
     geometry_msgs::msg::TransformStamped tf;
     tf.header.stamp=ts; tf.header.frame_id=frame_id_; tf.child_frame_id="base_link";
+    // tf 永远用真实位姿（不受噪声影响）
     tf.transform.translation.x=s.p.x(); tf.transform.translation.y=s.p.y(); tf.transform.translation.z=s.p.z();
     tf.transform.rotation=o.pose.pose.orientation;
     tf_br_->sendTransform(tf);
@@ -194,6 +242,14 @@ private:
   double sim_dt_=0.001; std::string frame_id_="map";
   uint64_t tick_cnt_=0;
   std::mutex rpm_mutex_; std::array<double,4> last_rpm_{0,0,0,0};
+
+  // 传感器噪声
+  std::unique_ptr<ImuNoiseModel> imu_noise_;
+  std::mt19937_64 odom_rng_{12346};
+  bool imu_noise_enabled_ = false;
+  double accel_nd_, accel_bi_, accel_brw_, gyro_nd_, gyro_bi_, gyro_brw_;
+  double odom_pos_noise_ = 0.0, odom_vel_noise_ = 0.0;
+  uint64_t noise_seed_ = 12345;
 
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr rpm_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
