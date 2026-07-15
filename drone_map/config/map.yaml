@@ -2,15 +2,20 @@
 # inflate=0.6 → 每个障碍物中心距目标 > (radius+0.6)
 drone_map:
   ros__parameters:
-    procedural: true
+    procedural: false
     seed: 42
     num_obstacles: 12
-    # 形状数量分配（-1 = 不限，按 num_obstacles 随机分配）
     num_spheres: 3
     num_cylinders: 3
     num_cubes: 2
     frame_id: "map"
     obstacles:
+      - "sphere 0.7 0.3 1.5 0.35"
+      - "sphere 1.0 0.5 1.5 0.35"
+      - "sphere 1.3 0.5 1.5 0.2"
+      - "cylinder 0.5 0.7 1.0 0.25 2.0"
+      - "cube 0.8 -0.2 1.5 0.2 0.2 0.3"
+      - "sphere 0.4 0.0 1.5 0.3"
 # =============================================================================
 # 验收场景 5 专用：狭窄通道绕行
 # 用法：取消下面所有注释，设 procedural: false

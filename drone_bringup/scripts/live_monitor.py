@@ -75,6 +75,35 @@ def r_goal():
             with lk: st['goal_x']=a; st['goal_y']=b; st['goal_z']=c
             a=b=c=None
 
+def r_obs():
+    p = sp.Popen(['ros2','topic','echo','/map/obstacles','--field','pose.position','--field','scale'],
+                  stdout=sp.PIPE, stderr=sp.DEVNULL, text=True, bufsize=1)
+    markers = []; cx=cy=cz=sx=sy=sz=None
+    for L in p.stdout:
+        L=L.strip()
+        if L=='' and cx is not None and sx is not None:
+            rv = max(abs(sx),abs(sy),abs(sz)) if abs(sy)>0.01 else abs(sx)
+            markers.append((cx,cy,cz,rv))
+            cx=cy=cz=sx=sy=sz=None; continue
+        if L=='---':
+            if markers: 
+                with lk: st['obs'] = list(markers)
+            markers = []; cx=cy=cz=sx=sy=sz=None; continue
+        try:
+            if L.startswith('x:'):
+                v=float(L.split(':')[1])
+                if cx is None: cx=v
+                elif sx is None: sx=v
+            elif L.startswith('y:'):
+                v=float(L.split(':')[1])
+                if cy is None: cy=v
+                elif sy is None: sy=v
+            elif L.startswith('z:'):
+                v=float(L.split(':')[1])
+                if cz is None: cz=v
+                elif sz is None: sz=v
+        except: pass
+
 def r_min():
     while st['run']:
         time.sleep(0.2)
@@ -149,7 +178,7 @@ canvas{border:1px solid #30363d;border-radius:6px;background:#161b22;margin-bott
 <h2>1. Err(t)=|pos-goal| (x=green z=blue, y=0-3m, ref=0.3m)</h2><canvas id="cpe"></canvas>
 <h2>2. RPM (FL/FR/BL/BR, y=0-50)</h2><canvas id="crp"></canvas>
 <h2>3. XY Trajectory (green=actual, bbox=[-1,4])</h2><canvas id="ctj"></canvas>
-<h2>4. Min Obstacle Dist (y=0-2m, red=0.4m safety)</h2><canvas id="cmd"></canvas>
+<h2>4. Obstacle Distances (all obstacles, red=0.4m safety, thick=min)</h2><canvas id="cmd"></canvas>
 <script>
 var CL=['#3fb950','#58a6ff','#d29922','#c9d1d9'];
 var HOV_Z=1.5;
@@ -221,7 +250,16 @@ function update(){
     for(var i=0;i<n;i++){ex.push(Math.abs(d.px[i]-d.goal_x));ez.push(Math.abs(d.pz[i]-HOV_Z))}
     chart('cpe',[ex,ez],'x=green z=blue',0,3,0.3);
     chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR',0,50,null);
-    chart('cmd',[d.min_d],'dist(m)',0,2,0.4);
+    var ads = d.all_d||[];
+    if(ads.length){
+      // thin grey lines for each obstacle
+      for(var k=0;k<ads.length;k++){
+        var single = new Array(d.min_d.length).fill(ads[k]);
+        chart('cmd',[single],'',0,2,0.4);
+      }
+      // thick red line for minimum
+      chart('cmd',[d.min_d],'min(dist)',0,2,0.4);
+    }
 
     // trajectory
     (function(){
@@ -263,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
                 d = {}
                 for k in ['t','px','py','pz','vx','vy','vz','rpm','rpm_t','goal_x','goal_y','goal_z','min_d','min_d_t']:
                     d[k] = st[k]
+                d['all_d'] = st.get('all_d', [])
                 # 确保 goal 默认值非 0（控制器默认 hover z=1.5）
                 if not d.get('goal_z'):
                     d['goal_z'] = 1.5
@@ -274,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     print('live_monitor: http://localhost:8765 | Ctrl+C=CSV')
-    for t in [th.Thread(target=f, daemon=True) for f in [r_odom, r_vel, r_rpm, r_goal, r_min]]:
+    for t in [th.Thread(target=f, daemon=True) for f in [r_odom, r_vel, r_rpm, r_goal, r_obs, r_min]]:
         t.start()
     time.sleep(2)
 
@@ -298,7 +337,7 @@ if __name__ == '__main__':
                 n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
                 for i in range(n):
                     row = []
-                    for k in ['t','px','py','pz','vx','vy','vz']:
+                    for k in ['t','px','py','pz']:
                         row.append(str(st[k][i]) if i < len(st[k]) else '')
                     for j in range(4):
                         row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
