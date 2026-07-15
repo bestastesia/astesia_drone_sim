@@ -123,6 +123,45 @@ public:
 
     RCLCPP_INFO(get_logger(), "ready mass=%.2f kF=%.2f l=%.3f dt=%.2fms",
                 p.mass, p.k_F, p.arm_length, sim_dt_*1e3);
+
+    // 运行时参数变更回调 — 支持 ros2 param set 热更新 wind/noise
+    param_cb_handle_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params) {
+          rcl_interfaces::msg::SetParametersResult result; result.successful = true;
+          for (const auto& p : params) {
+            const auto& n = p.get_name();
+            if (n == "wind_enabled") {
+              dynamics_->setWindEnabled(p.as_bool());
+              RCLCPP_INFO(get_logger(), "wind_enabled=%d", p.as_bool());
+            } else if (n == "wind_force") {
+              auto v = p.as_double_array();
+              if (v.size() >= 3) { dynamics_->setWindForce(Vec3d(v[0],v[1],v[2])); }
+            } else if (n == "wind_gust_amplitude" || n == "wind_gust_period") {
+              dynamics_->setWindGust(
+                  get_parameter("wind_gust_amplitude").as_double(),
+                  get_parameter("wind_gust_period").as_double());
+            } else if (n == "imu_noise_enabled" || n.rfind("accel_",0)==0 || n.rfind("gyro_",0)==0
+                       || n == "odom_pos_noise" || n == "odom_vel_noise") {
+              // Re-create noise model with new params
+              imu_noise_enabled_ = get_parameter("imu_noise_enabled").as_bool();
+              accel_nd_ = get_parameter("accel_noise_density").as_double();
+              accel_bi_ = get_parameter("accel_bias_init").as_double();
+              accel_brw_ = get_parameter("accel_bias_rw").as_double();
+              gyro_nd_ = get_parameter("gyro_noise_density").as_double();
+              gyro_bi_ = get_parameter("gyro_bias_init").as_double();
+              gyro_brw_ = get_parameter("gyro_bias_rw").as_double();
+              odom_pos_noise_ = get_parameter("odom_pos_noise").as_double();
+              odom_vel_noise_ = get_parameter("odom_vel_noise").as_double();
+              if (imu_noise_enabled_) {
+                imu_noise_ = std::make_unique<ImuNoiseModel>(
+                    accel_nd_, accel_bi_, accel_brw_, gyro_nd_, gyro_bi_, gyro_brw_, noise_seed_);
+              } else { imu_noise_.reset(); }
+              RCLCPP_INFO(get_logger(), "noise updated: imu=%d odom_pos=%.3f odom_vel=%.3f",
+                  imu_noise_enabled_, odom_pos_noise_, odom_vel_noise_);
+            }
+          }
+          return result;
+        });
   }
 
 private:
@@ -262,6 +301,7 @@ private:
 
   rclcpp::CallbackGroup::SharedPtr dyn_group_;
   rclcpp::TimerBase::SharedPtr dyn_timer_, pub_timer_, path_timer_, mark_timer_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 };
 
 int main(int argc, char** argv){
