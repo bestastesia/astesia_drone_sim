@@ -34,6 +34,12 @@ struct Params {
   double sim_dt = 0.001;     // s
   bool add_linear_drag = false;
   double drag_coeff = 0.1;   // 线性阻力 -c·v（若启用）
+  // 风扰
+  bool wind_enabled = false;
+  Vec3d wind_force{0, 0, 0};  // 恒定风力 (世界系 N)
+  double wind_gust_amplitude = 0.0;  // 阵风幅值 (N)
+  double wind_gust_period = 2.0;     // 阵风周期 (s)
+  double wind_gust_phase = 0.0;      // 阵风随机相位 (rad)
   Vec3d init_pos{0, 0, 0};
   double init_yaw = 0.0;
 };
@@ -45,6 +51,7 @@ struct State {
   Vec3d w_body = Vec3d::Zero();   // 机体系角速度
   std::array<double, 4> motor_omega{0, 0, 0, 0};  // rad/s
   Vec3d a_world_last = Vec3d::Zero();  // 最近一步机体系→世界系加速度（供 IMU 特征力）
+  Vec3d wind_total = Vec3d::Zero();     // 当前步风扰合力（供 ground station 展示）
 };
 
 // 从 RPM 命令转 ω_cmd (rad/s)
@@ -73,10 +80,21 @@ class DroneDynamics {
     // 由 init_yaw 构初始姿态
     state_.q = Quatd(Eigen::AngleAxisd(params_.init_yaw, Vec3d::UnitZ()));
     state_.p = params_.init_pos;
+    wind_time_ = 0.0;
   }
 
   const State& state() const { return state_; }
   const Params& params() const { return params_; }
+  Vec3d totalWindForce() const { return wind_force_total_; }
+
+  // 风扰 API
+  void setWindEnabled(bool en) { params_.wind_enabled = en; }
+  bool windEnabled() const { return params_.wind_enabled; }
+  void setWindForce(const Vec3d& f) { params_.wind_force = f; }
+  Vec3d windForce() const { return params_.wind_force; }
+  void setWindGust(double amp, double period) {
+    params_.wind_gust_amplitude = amp; params_.wind_gust_period = period;
+  }
 
   // 用一组 RPM 命令推进一个 sim_dt。内部串 N 步子步以保持 ω 命令稳定（简单起见 1 步/dt）。
   void stepFromRpmCmd(const std::array<double, 4>& motor_rpm_cmd, double dt) {
@@ -107,12 +125,35 @@ class DroneDynamics {
 
     // 姿态矩阵 R_WB（把机体旋到世界）：用 q_WB
     Mat3d R_WB = state_.q.toRotationMatrix();
-    // 平动：a_W = R_WB * (thrust/m) ẑ_B − g ẑ_W (+ 可选阻力)
+    // 平动：a_W = R_WB * (thrust/m) ẑ_B − g ẑ_W + wind (+ 可选阻力)
     Vec3d thrust_world = R_WB * Vec3d(0, 0, thrust);  // 机体 +z 旋到世界
     Vec3d gravity(0, 0, -drone_common::kGravity);
     Vec3d a_world = thrust_world / params_.mass + gravity;
     if (params_.add_linear_drag) a_world += -params_.drag_coeff * state_.v;
+
+    // 风扰：恒定力 + 阵风（正弦调制）
+    Vec3d wind_force_total = Vec3d::Zero();
+    if (params_.wind_enabled) {
+      wind_force_total = params_.wind_force;  // 恒定分量
+      if (params_.wind_gust_amplitude > 1e-6) {
+        wind_time_ += dt;
+        double gust = params_.wind_gust_amplitude *
+            std::sin(2.0 * M_PI * wind_time_ / params_.wind_gust_period
+                     + params_.wind_gust_phase);
+        // 阵风按风力方向施加
+        double f_norm = params_.wind_force.norm();
+        if (f_norm > 1e-6) {
+          wind_force_total += params_.wind_force.normalized() * gust;
+        } else {
+          // 无恒定风但有阵风 → 沿 x 轴施加
+          wind_force_total.x() += gust;
+        }
+      }
+      a_world += wind_force_total / params_.mass;
+    }
     state_.a_world_last = a_world;
+    wind_force_total_ = wind_force_total;
+    state_.wind_total = wind_force_total;
 
     // 转动：ω̇_B = I⁻¹ (τ − ω × (I ω))
     Vec3d Iw = I_body_ * state_.w_body;
@@ -124,6 +165,9 @@ class DroneDynamics {
     state_.w_body += wdot * dt;
     state_.q = drone_common::integrateQuaternion(state_.q, state_.w_body, dt);
   }
+
+  double wind_time_ = 0.0;
+  Vec3d wind_force_total_ = Vec3d::Zero();
 
  private:
   Params params_;

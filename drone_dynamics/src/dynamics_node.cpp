@@ -42,6 +42,10 @@ public:
     declare_parameter<double>("sim_dt", 0.001);
     declare_parameter<bool>("add_linear_drag", false);
     declare_parameter<double>("drag_coeff", 0.1);
+    declare_parameter<bool>("wind_enabled", false);
+    declare_parameter<std::vector<double>>("wind_force", {0.0, 0.0, 0.0});
+    declare_parameter<double>("wind_gust_amplitude", 0.0);
+    declare_parameter<double>("wind_gust_period", 2.0);
     declare_parameter<std::vector<double>>("init_pose", {0.0,0.0,0.0,0.0});
     declare_parameter<std::string>("frame_id", "map");
 
@@ -108,6 +112,11 @@ private:
     p.sim_dt=get_parameter("sim_dt").as_double();
     p.add_linear_drag=get_parameter("add_linear_drag").as_bool();
     p.drag_coeff=get_parameter("drag_coeff").as_double();
+    p.wind_enabled=get_parameter("wind_enabled").as_bool();
+    auto wf=get_parameter("wind_force").as_double_array();
+    if(wf.size()>=3) p.wind_force<<wf[0],wf[1],wf[2];
+    p.wind_gust_amplitude=get_parameter("wind_gust_amplitude").as_double();
+    p.wind_gust_period=get_parameter("wind_gust_period").as_double();
     auto init=get_parameter("init_pose").as_double_array();
     if(init.size()>=4){ p.init_pos<<init[0],init[1],init[2]; p.init_yaw=init[3]; }
     return p;

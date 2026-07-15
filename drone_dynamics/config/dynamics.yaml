@@ -14,3 +14,8 @@ drone_dynamics:
     drag_coeff: 0.1
     init_pose: [0.0, 0.0, 0.0, 0.0]
     frame_id: "map"
+    # 风扰 — runtime hot-swap via ros2 param set
+    wind_enabled: false
+    wind_force: [0.0, 0.0, 0.0]   # 恒定风力 (世界系, N) [Fx, Fy, Fz]
+    wind_gust_amplitude: 0.0        # 阵风幅值 (N), 0 = 无阵风
+    wind_gust_period: 2.0           # 阵风周期 (s)
