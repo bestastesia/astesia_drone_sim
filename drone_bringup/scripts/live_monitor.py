@@ -328,8 +328,17 @@ function setNoise(){
   fb.textContent=en?'noise ON':'noise OFF';
   setTimeout(function(){fb.textContent=''},3000);
 }
+var _paramQueue=[],_paramTimer=null;
 function applyParam(node,param,value){
-  fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node:node,param:param,value:value})});
+  _paramQueue.push({node:node,param:param,value:value});
+  if(!_paramTimer)_paramTimer=setTimeout(_flushParams,100);
+}
+function _flushParams(){
+  _paramTimer=null;if(!_paramQueue.length)return;
+  var batch=_paramQueue.splice(0,_paramQueue.length);
+  function next(){if(!batch.length)return;var p=batch.shift();
+  fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}).then(function(){next()}).catch(function(){next()});}
+  next();
 }
 
 function update(){
