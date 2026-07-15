@@ -279,7 +279,12 @@ if __name__ == '__main__':
         allow_reuse_address = True
         def server_bind(self):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            HTTPServer.server_bind(self)
+            try:
+                HTTPServer.server_bind(self)
+            except OSError:
+                import time
+                time.sleep(0.5)
+                HTTPServer.server_bind(self)
     try:
         RS(('0.0.0.0', 8765), Handler).serve_forever()
     except KeyboardInterrupt:
