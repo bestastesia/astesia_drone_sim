@@ -24,8 +24,8 @@ drone_controller:
     k_M: 0.05
     Kp_pos: [2.0, 2.0, 3.0]
     Kd_pos: [2.0, 2.0, 2.4]
-    Ki_pos: [0.0, 0.0, 0.0]
-    Ki_max: 1.0
+    Ki_pos: [0.5, 0.0, 0.0]     # x 轴积分项 — 消除风扰/外力稳态误差
+    Ki_max: 2.0                   # 积分限幅@2 m/s²（对抗2N风@1kg质量）
     a_xy_max: 4.0
     a_z_min: -3.0
     a_z_max: 6.0
