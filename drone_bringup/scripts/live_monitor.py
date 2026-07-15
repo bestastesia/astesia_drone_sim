@@ -211,6 +211,29 @@ button{cursor:pointer}button:hover{background:#21262d}
 <div id="sliders"></div>
 <button onclick="applyParams()" style="width:100%;margin-top:4px;background:#1f6feb;color:#fff;font-weight:bold">Apply All</button>
 <div class="fb" id="param-fb"></div></div>
+<div class="panel"><h3>&#x1f32c; Wind Disturbance</h3>
+<div class="row"><label>Enabled</label><input type="checkbox" id="wind_enabled" onchange="setWind()"></div>
+<div class="row"><label>Force X (N)</label><input type="number" id="wind_fx" value="2.0" step="0.5" onchange="setWind()"></div>
+<div class="row"><label>Force Y (N)</label><input type="number" id="wind_fy" value="0.0" step="0.5" onchange="setWind()"></div>
+<div class="row"><label>Gust (N)</label><input type="number" id="wind_gust" value="0.5" step="0.1" onchange="setWind()"></div>
+<div class="divider"></div>
+<button class="btn-preset" onclick="windPreset('none')">&#x1f6ab; No Wind</button>
+<button class="btn-preset" onclick="windPreset('light')">&#x1f4a8; Light</button>
+<button class="btn-preset" onclick="windPreset('medium')">&#x1f32c; Medium</button>
+<button class="btn-preset" onclick="windPreset('strong')">&#x1f32a; Strong</button>
+<div class="fb" id="wind-fb"></div></div>
+<div class="panel"><h3>&#x1f4e1; Sensor Noise</h3>
+<div class="row"><label>IMU Noise</label><input type="checkbox" id="imu_noise" onchange="setNoise()"></div>
+<div class="row"><label>Accel &sigma;</label><input type="number" id="accel_nd" value="0.05" step="0.01" onchange="setNoise()"></div>
+<div class="row"><label>Gyro &sigma;</label><input type="number" id="gyro_nd" value="0.01" step="0.005" onchange="setNoise()"></div>
+<div class="row"><label>Accel Bias</label><input type="number" id="accel_bias" value="0.1" step="0.05" onchange="setNoise()"></div>
+<div class="row"><label>Odom Pos &sigma;</label><input type="number" id="odom_pos" value="0.02" step="0.01" onchange="setNoise()"></div>
+<div class="row"><label>Odom Vel &sigma;</label><input type="number" id="odom_vel" value="0.01" step="0.01" onchange="setNoise()"></div>
+<div class="divider"></div>
+<button class="btn-preset" onclick="noisePreset('off')">&#x1f6ab; Off</button>
+<button class="btn-preset" onclick="noisePreset('light')">&#x1f4e1; Light</button>
+<button class="btn-preset" onclick="noisePreset('realistic')">&#x1f4e1; Realistic</button>
+<div class="fb" id="noise-fb"></div></div>
 <div class="panel"><h3>&#x1f6d1; Emergency</h3>
 <button class="btn-stop" onclick="emergency('stop')">&#x1f6d1; STOP MOTORS</button>
 <button onclick="emergency('hover')" style="width:100%;margin-top:4px;background:#d29922;color:#000;font-weight:bold">&#x1f3e0; Return to Origin</button>
@@ -263,6 +286,51 @@ function emergency(a){var fb=document.getElementById('emerg-fb');fb.textContent=
 var PARAMS={'Kp_pos.x':{min:0.1,max:10,step:0.1,def:2.0},'Kp_pos.z':{min:0.5,max:15,step:0.1,def:3.0},'Kd_pos.x':{min:0,max:6,step:0.1,def:2.0},'Kd_pos.z':{min:0,max:8,step:0.1,def:2.4},'Kp_att.x':{min:1,max:30,step:0.5,def:8},'Kd_rate.x':{min:0.1,max:5,step:0.1,def:0.8},'a_xy_max':{min:1,max:12,step:0.5,def:4.0},'a_z_max':{min:1,max:15,step:0.5,def:6.0}};
 (function(){var h='';for(var k in PARAMS){var p=PARAMS[k];var id='sl_'+k.replace(/\./g,'_');h+='<div class=row><label>'+k+'</label><span class=val id=sv_'+k.replace(/\./g,'_')+'>'+p.def.toFixed(1)+'</span></div>';h+='<input type=range id='+id+' min='+p.min+' max='+p.max+' step='+p.step+' value='+p.def+' oninput="var e=document.getElementById(\'sv_'+k.replace(/\./g,'_')+'\');var s=document.getElementById(\''+id+'\');if(e&&s)e.textContent=parseFloat(s.value).toFixed(1)">'}document.getElementById('sliders').innerHTML=h})();
 function applyParams(){var fb=document.getElementById('param-fb');var jobs=[];for(var k in PARAMS){var el=document.getElementById('sl_'+k.replace(/\./g,'_'));if(el)jobs.push({node:'/drone_controller',param:k,value:parseFloat(el.value)})}if(!jobs.length)return;fb.textContent='applying '+jobs.length+' params...';var i=0;function nxt(){if(i>=jobs.length){fb.textContent='done!';setTimeout(function(){fb.textContent=''},3000);return}var p=jobs[i];fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}).then(function(r){return r.json()}).then(function(j){if(!j.ok)fb.textContent='FAIL: '+p.param;i++;nxt()}).catch(function(e){fb.textContent='ERROR: '+e})}nxt()}
+
+function windPreset(p){
+  var el=document.getElementById('wind_enabled'), fx=document.getElementById('wind_fx'), fy=document.getElementById('wind_fy'), g=document.getElementById('wind_gust');
+  if(p=='none'){el.checked=false;fx.value='0.0';fy.value='0.0';g.value='0.0'}
+  else if(p=='light'){el.checked=true;fx.value='0.5';fy.value='0.0';g.value='0.2'}
+  else if(p=='medium'){el.checked=true;fx.value='2.0';fy.value='0.0';g.value='1.0'}
+  else if(p=='strong'){el.checked=true;fx.value='4.0';fy.value='0.0';g.value='2.0'}
+  setWind();
+}
+function setWind(){
+  var en=document.getElementById('wind_enabled').checked;
+  var fx=parseFloat(document.getElementById('wind_fx').value)||0;
+  var fy=parseFloat(document.getElementById('wind_fy').value)||0;
+  var gust=parseFloat(document.getElementById('wind_gust').value)||0;
+  var fb=document.getElementById('wind-fb');
+  applyParam('/drone_dynamics','wind_enabled',en);
+  applyParam('/drone_dynamics','wind_force','['+fx.toFixed(1)+','+fy.toFixed(1)+',0.0]');
+  applyParam('/drone_dynamics','wind_gust_amplitude',gust);
+  fb.textContent=en?('wind '+fx.toFixed(1)+','+fy.toFixed(1)+'N'):'off';
+  setTimeout(function(){fb.textContent=''},3000);
+}
+function noisePreset(p){
+  var el=document.getElementById('imu_noise'), an=document.getElementById('accel_nd'), gn=document.getElementById('gyro_nd'), ab=document.getElementById('accel_bias'), op=document.getElementById('odom_pos'), ov=document.getElementById('odom_vel');
+  if(p=='off'){el.checked=false;an.value='0.00';gn.value='0.000';ab.value='0.00';op.value='0.00';ov.value='0.00'}
+  else if(p=='light'){el.checked=true;an.value='0.02';gn.value='0.005';ab.value='0.05';op.value='0.01';ov.value='0.005'}
+  else if(p=='realistic'){el.checked=true;an.value='0.08';gn.value='0.015';ab.value='0.15';op.value='0.03';ov.value='0.02'}
+  setNoise();
+}
+function setNoise(){
+  var en=document.getElementById('imu_noise').checked;
+  var fb=document.getElementById('noise-fb');
+  applyParam('/drone_dynamics','imu_noise_enabled',en);
+  if(en){
+    applyParam('/drone_dynamics','accel_noise_density',parseFloat(document.getElementById('accel_nd').value));
+    applyParam('/drone_dynamics','gyro_noise_density',parseFloat(document.getElementById('gyro_nd').value));
+    applyParam('/drone_dynamics','accel_bias_init',parseFloat(document.getElementById('accel_bias').value));
+    applyParam('/drone_dynamics','odom_pos_noise',parseFloat(document.getElementById('odom_pos').value));
+    applyParam('/drone_dynamics','odom_vel_noise',parseFloat(document.getElementById('odom_vel').value));
+  }
+  fb.textContent=en?'noise ON':'noise OFF';
+  setTimeout(function(){fb.textContent=''},3000);
+}
+function applyParam(node,param,value){
+  fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node:node,param:param,value:value})});
+}
 
 function update(){
   fetch('/data').then(function(r){return r.json()}).then(function(d){
