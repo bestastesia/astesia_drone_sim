@@ -11,6 +11,7 @@ install(DIRECTORY launch config rviz scripts
 # Python scripts as executables (so ros2 run can find them)
 install(PROGRAMS
   scripts/waypoint_sender.py
+  scripts/trajectory_generator.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
