@@ -240,7 +240,7 @@ function update(){
     chart('cpe',[ex,ez],'x=green z=blue',0,3,0.3);
     chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR',0,50,null);
     var ads = d.all_d||[];
-    if(ads.length && d.min_d.length){
+    if(ads.length){
       var c4=document.getElementById('cmd');
       c4.width=Math.max(500,c4.parentElement.clientWidth-24);
       c4.height=220;
@@ -248,35 +248,25 @@ function update(){
       ctx4.clearRect(0,0,w4,h4);
       ctx4.strokeStyle='#21262d';ctx4.lineWidth=1;
       for(var i=0;i<=4;i++){ctx4.beginPath();ctx4.moveTo(0,h4*i/4);ctx4.lineTo(w4,h4*i/4);ctx4.stroke()}
-      // ref line at 0.4
       ctx4.setLineDash([4,6]);ctx4.strokeStyle='#f85149';ctx4.lineWidth=1.5;
       var ry4=h4-0.4/2*h4;ctx4.beginPath();ctx4.moveTo(0,ry4);ctx4.lineTo(w4,ry4);ctx4.stroke();
-      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40m safety',4,ry4-4);
-      // distinct colors for each obstacle
-      var OBS_COLORS=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7','#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa','#ff8787','#74c0fc','#ffa94d','#da77f2'];
-      // thin lines for each obstacle (use raw distance, not min)
-      var allDist = d.all_d||[];
-      var hasData = d.all_d_raw || d.all_d;  // prefer raw distances if available
-      for(var k=0;k<allDist.length;k++){
-        ctx4.strokeStyle=OBS_COLORS[k % OBS_COLORS.length];ctx4.lineWidth=1.0;ctx4.beginPath();
-        // allDist[k] is the distance for this obstacle at the latest tick
-        // For time series: use d.min_d as time base, draw horizontal-ish line
-        // Actually allDist[k] is a SCALAR (current distance to obstacle k)
-        // To draw them differently: use the marker position distance (pre-subtraction)
-        // Since we only have post-subtraction: draw horizontal lines at y=value
-        var y4=h4-allDist[k]/2*h4;
+      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40m',4,ry4-4);
+      var OBS_COLORS=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7',
+                       '#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa'];
+      for(var k=0;k<ads.length;k++){
+        ctx4.strokeStyle=OBS_COLORS[k % 12];ctx4.lineWidth=1.2;ctx4.beginPath();
+        var y4=h4-ads[k]/2*h4;
         ctx4.moveTo(0,y4);ctx4.lineTo(w4,y4);ctx4.stroke();
-        // label each line
-        ctx4.fillStyle=OBS_COLORS[k % OBS_COLORS.length];ctx4.font='8px sans-serif';
-        ctx4.fillText(k,2,y4-2);
+        ctx4.fillStyle=OBS_COLORS[k % 12];ctx4.font='9px sans-serif';ctx4.fillText(''+k,2,y4-2);
       }
-      // thick green line for minimum
-      ctx4.strokeStyle='#3fb950';ctx4.lineWidth=2.5;ctx4.beginPath();
-      for(var i=0;i<d.min_d.length;i++){
-        var x4=i/d.min_d.length*w4,y4=h4-d.min_d[i]/2*h4;
-        i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
+      if(d.min_d.length){
+        ctx4.strokeStyle='#3fb950';ctx4.lineWidth=2.8;ctx4.beginPath();
+        for(var i=0;i<d.min_d.length;i++){
+          var x4=i/d.min_d.length*w4,y4=h4-d.min_d[i]/2*h4;
+          i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
+        }
+        ctx4.stroke();ctx4.fillStyle='#3fb950';ctx4.font='10px sans-serif';ctx4.fillText('min',w4-24,12);
       }
-      ctx4.stroke();
       ctx4.fillStyle='#8b949e';ctx4.font='10px sans-serif';
       for(var i=0;i<=4;i++){ctx4.fillText((2-0.5*i).toFixed(1),2,h4*i/4+10)}
       ctx4.fillStyle='#58a6ff';ctx4.fillText('obs dist(m) green=min colored=each',4,12);
