@@ -263,6 +263,9 @@ class Handler(BaseHTTPRequestHandler):
                 d = {}
                 for k in ['t','px','py','pz','vx','vy','vz','rpm','rpm_t','goal_x','goal_y','goal_z','min_d','min_d_t']:
                     d[k] = st[k]
+                # 确保 goal 默认值非 0（控制器默认 hover z=1.5）
+                if not d.get('goal_z'):
+                    d['goal_z'] = 1.5
             self.wfile.write(json.dumps(d).encode())
         else:
             self.send_response(404)
