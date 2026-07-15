@@ -13,6 +13,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <random>
 
 #include "drone_common/drone_common.hpp"
 
@@ -131,22 +132,34 @@ class DroneDynamics {
     Vec3d a_world = thrust_world / params_.mass + gravity;
     if (params_.add_linear_drag) a_world += -params_.drag_coeff * state_.v;
 
-    // 风扰：恒定力 + 阵风（正弦调制）
+    // 风扰：恒定力 + 阵风（正弦 + 随机湍流）
     Vec3d wind_force_total = Vec3d::Zero();
     if (params_.wind_enabled) {
       wind_force_total = params_.wind_force;  // 恒定分量
+      // 阵风：正弦调制 + Ornstein-Uhlenbeck 随机过程
+      wind_time_ += dt;
       if (params_.wind_gust_amplitude > 1e-6) {
-        wind_time_ += dt;
-        double gust = params_.wind_gust_amplitude *
+        double gust_det = params_.wind_gust_amplitude *
             std::sin(2.0 * M_PI * wind_time_ / params_.wind_gust_period
                      + params_.wind_gust_phase);
-        // 阵风按风力方向施加
+        // 随机湍流: dx = -θ·x·dt + σ·dW  (OU process → filtered white noise)
+        // 用简单的 Euler-Maruyama 积分
+        double theta = 1.0;   // 均值回复率 (≈ 1s 时间常数)
+        double sigma = params_.wind_gust_amplitude * 0.5;  // 湍流强度
+        // 生成随机噪声 (Box-Muller)
+        double u1 = (wind_rng_() + 1.0) / (wind_rng_.max() + 2.0);
+        double u2 = (wind_rng_() + 1.0) / (wind_rng_.max() + 2.0);
+        if (u1 < 1e-10) u1 = 1e-10;
+        double dw = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+        wind_turbulence_ += -theta * wind_turbulence_ * dt + sigma * dw * std::sqrt(dt);
+        // 总阵风 = 确定性 + 随机
+        double gust_total = gust_det + wind_turbulence_;
+        // 阵风沿恒定风方向施加
         double f_norm = params_.wind_force.norm();
         if (f_norm > 1e-6) {
-          wind_force_total += params_.wind_force.normalized() * gust;
+          wind_force_total += params_.wind_force.normalized() * gust_total;
         } else {
-          // 无恒定风但有阵风 → 沿 x 轴施加
-          wind_force_total.x() += gust;
+          wind_force_total.x() += gust_total;
         }
       }
       a_world += wind_force_total / params_.mass;
@@ -168,6 +181,8 @@ class DroneDynamics {
 
   double wind_time_ = 0.0;
   Vec3d wind_force_total_ = Vec3d::Zero();
+  double wind_turbulence_ = 0.0;
+  std::mt19937_64 wind_rng_{42};  // 风扰随机数生成器
 
  private:
   Params params_;

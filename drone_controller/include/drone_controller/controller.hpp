@@ -124,12 +124,16 @@ class DroneController {
       // LADRC 三轴独立计算（观测器已在内部更新）
       a_des = ladrc_.step(odom_p, goal_p);
     } else {
-      // PD + 可选积分
+      // PD + 可选积分 + 扰动前馈补偿
       a_des = params_.Kp_pos.cwiseProduct(ep) + params_.Kd_pos.cwiseProduct(ev);
       ep_integral_ += ep * params_.ctrl_dt;
       ep_integral_ = ep_integral_.cwiseMin(params_.Ki_max).cwiseMax(-params_.Ki_max);
       if (params_.Ki_pos.norm() > 1e-9)
         a_des += params_.Ki_pos.cwiseProduct(ep_integral_);
+      // 慢速扰动观测器：稳态位置误差积分 → 估计外力 → 前馈补偿
+      dist_est_ += ep * params_.ctrl_dt * 0.3;  // 缓慢积分，避免振荡
+      dist_est_ = dist_est_.cwiseMax(-6.0).cwiseMin(6.0);  // ±6 m/s² 限幅
+      a_des += dist_est_;
     }
 
     // 加速度限幅 & 远目标 failsafe（两种模式共用）
@@ -192,12 +196,13 @@ class DroneController {
     return motorSqToRpm(u);
   }
 
-  void resetIntegral() { ep_integral_.setZero(); }
+  void resetIntegral() { ep_integral_.setZero(); dist_est_.setZero(); }
 
  private:
   Params params_;
   Eigen::Matrix4d Binv_;
   Vec3d ep_integral_{0, 0, 0};
+  Vec3d dist_est_{0, 0, 0};  // 扰动估计 (m/s²)
   LADRC3D ladrc_;
 };
 
