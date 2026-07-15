@@ -354,9 +354,10 @@ src/astesia_drone_sim/
 │   ├── rviz/drone.rviz         #   RViz 预设配置
 │   ├── scripts/
 │   │   ├── waypoint_sender.py  #   多航点顺序发送
-│   │   │   ├── record_and_analyze.sh # 录 bag + 自动分析
-│   │   │   ├── plot_bag.py         #   bag → CSV + 数值摘要
-│   │   │   └── live_monitor.py     #   浏览器实时监控仪表盘
+│   │   ├── live_monitor.py      #   地面站（浏览器仪表盘+控制）
+│   │   ├── record_and_analyze.sh # 录 bag + 自动分析
+│   │   ├── plot_bag.py         #   bag → CSV + 数值摘要
+│   │   └── ladrc_autotune.py   #   LADRC 自适应整定（实验性）
 │   └── report/
 │       ├── report.md           #   技术报告
 │       ├── verification_guide.html # 验收场景录制指南
@@ -399,6 +400,18 @@ source install/setup.bash
 
 - **RPM Sat**: 正常时显示 `OK`（绿），RPM 达到上限时显示 `SATURATED`（红）
 - **Att Diverge**: 正常时显示 `OK`（绿），位置/速度 NaN 时显示 `DIVERGED`（红）
+
+### 交互式控制面板（地面站）
+
+右侧边栏提供三个控制面板：
+
+**🎯 目标点下发**：输入 x/y/z 点击 Send Goal，或点预设按钮（Home / (2,1,1.5) / (2,2,1.5) / (0,0,3)）
+
+**⚙ 控制器热调参**：8 个参数滑块（Kp_pos、Kd_pos、Kp_att、Kd_rate、a_xy_max、a_z_max），拖动后点「Apply All」通过 `ros2 param set` 即时生效，不需要重启
+
+**🛑 紧急操作**：
+- STOP MOTORS — 向 `/drone/motor_rpm_cmd` 发送零 RPM，立即停转
+- Return to Origin — 下发目标点 (0,0,1.5)，无人机飞回原点悬停
 
 ### 退出
 
