@@ -87,7 +87,11 @@ def r_obs():
             cx=cy=cz=sx=sy=sz=None; continue
         if L=='---':
             if markers: 
-                with lk: st['obs'] = list(markers)
+                with lk:
+                    if not st.get('_obs_dbg', False):
+                        st['_obs_dbg'] = True
+                        print('r_obs: %d markers captured from /map/obstacles' % len(markers))
+                    st['obs'] = list(markers)
             markers = []; cx=cy=cz=sx=sy=sz=None; continue
         try:
             if L.startswith('x:'):
@@ -251,14 +255,39 @@ function update(){
     chart('cpe',[ex,ez],'x=green z=blue',0,3,0.3);
     chart('crp',[d.rpm[0],d.rpm[1],d.rpm[2],d.rpm[3]],'FL/FR/BL/BR',0,50,null);
     var ads = d.all_d||[];
-    if(ads.length){
-      // thin grey lines for each obstacle
+    if(ads.length && d.min_d.length){
+      var c4=document.getElementById('cmd');
+      c4.width=Math.max(500,c4.parentElement.clientWidth-24);
+      c4.height=220;
+      var w4=c4.width,h4=c4.height,ctx4=c4.getContext('2d');
+      ctx4.clearRect(0,0,w4,h4);
+      // grid
+      ctx4.strokeStyle='#21262d';ctx4.lineWidth=1;
+      for(var i=0;i<=4;i++){ctx4.beginPath();ctx4.moveTo(0,h4*i/4);ctx4.lineTo(w4,h4*i/4);ctx4.stroke()}
+      // ref line at 0.4
+      ctx4.setLineDash([4,6]);ctx4.strokeStyle='#f85149';ctx4.lineWidth=1.5;
+      var ry4=h4-0.4/2*h4;ctx4.beginPath();ctx4.moveTo(0,ry4);ctx4.lineTo(w4,ry4);ctx4.stroke();
+      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40',4,ry4-4);
+      // thin lines for each obstacle
       for(var k=0;k<ads.length;k++){
-        var single = new Array(d.min_d.length).fill(ads[k]);
-        chart('cmd',[single],'',0,2,0.4);
+        ctx4.strokeStyle='rgba(139,148,158,0.3)';ctx4.lineWidth=0.8;ctx4.beginPath();
+        for(var i=0;i<d.min_d.length;i++){
+          var x4=i/d.min_d.length*w4,y4=h4-ads[k]/2*h4;
+          i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
+        }
+        ctx4.stroke();
       }
-      // thick red line for minimum
-      chart('cmd',[d.min_d],'min(dist)',0,2,0.4);
+      // thick line for minimum
+      ctx4.strokeStyle='#3fb950';ctx4.lineWidth=2.5;ctx4.beginPath();
+      for(var i=0;i<d.min_d.length;i++){
+        var x4=i/d.min_d.length*w4,y4=h4-d.min_d[i]/2*h4;
+        i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
+      }
+      ctx4.stroke();
+      // axis labels
+      ctx4.fillStyle='#8b949e';ctx4.font='10px sans-serif';
+      for(var i=0;i<=4;i++){ctx4.fillText((2-0.5*i).toFixed(1),2,h4*i/4+10)}
+      ctx4.fillStyle='#58a6ff';ctx4.fillText('dist(m) green=min grey=each',4,12);
     }
 
     // trajectory
