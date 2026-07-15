@@ -18,5 +18,7 @@ workflow-friction.log
 
 # 不提交 rosbag（体积大）
 bag_*/
+report/bags/*.db3
+report/bags/*.mcap
 *.db3
 *.mcap
