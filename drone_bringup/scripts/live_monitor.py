@@ -317,30 +317,31 @@ if __name__ == '__main__':
         t.start()
     time.sleep(2)
 
-    class RS(HTTPServer):
-        allow_reuse_address = True
-        def server_bind(self):
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                HTTPServer.server_bind(self)
-            except OSError:
-                import time
-                time.sleep(0.5)
-                HTTPServer.server_bind(self)
-    try:
-        RS(('0.0.0.0', 8765), Handler).serve_forever()
-    except KeyboardInterrupt:
-        print("\nsaving CSV...")
-        with lk:
-            with open(SF, 'w') as f:
-                f.write("t,px,py,pz,vx,vy,vz,rpm0,rpm1,rpm2,rpm3,min_obs_dist\n")
-                n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
-                for i in range(n):
-                    row = []
-                    for k in ['t','px','py','pz']:
-                        row.append(str(st[k][i]) if i < len(st[k]) else '')
-                    for j in range(4):
-                        row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
-                    row.append(str(st['min_d'][i]) if i < len(st['min_d']) else '')
-                    f.write(','.join(row) + '\n')
-        print(f'Saved {SF} ({n} rows)')
+    # Start HTTP server with port conflict handling
+    for retry in range(3):
+        try:
+            HTTPServer.allow_reuse_address = True
+            srv = HTTPServer(('0.0.0.0', 8765), Handler)
+            srv.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.serve_forever()
+            break
+        except OSError:
+            time.sleep(1.0)
+            sp.run(['fuser','-k','8765/tcp'], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+    else:
+        print('ERROR: could not bind port 8765')
+
+    # Save CSV on exit
+    with lk:
+        with open(SF, 'w') as f:
+            f.write("t,px,py,pz,vx,vy,vz,rpm0,rpm1,rpm2,rpm3,min_obs_dist\n")
+            n = max(len(st['t']), len(st['rpm_t']), len(st['min_d_t']))
+            for i in range(n):
+                row = []
+                for k in ['t','px','py','pz']:
+                    row.append(str(st[k][i]) if i < len(st[k]) else '')
+                for j in range(4):
+                    row.append(str(st['rpm'][j][i]) if i < len(st['rpm'][j]) else '')
+                row.append(str(st['min_d'][i]) if i < len(st['min_d']) else '')
+                f.write(','.join(row) + '\n')
+    print(f'Saved {SF} ({n} rows)')
