@@ -7,33 +7,22 @@ ROS2 Humble 四旋翼无人机仿真器——2027 保研招生编程题（60 分
 ---
 
 ## 目录
-1. [系统要求](#系统要求)
-2. [克隆与构建](#克隆与构建)
-3. [一键启动](#一键启动)
-4. [怎么让无人机飞到指定位置](#怎么让无人机飞到指定位置)
-5. [地图与障碍物](#地图与障碍物)
-6. [控制器调参](#控制器调参)
-7. [规划器参数](#规划器参数)
-8. [录制实验数据](#录制实验数据)
-9. [系统架构](#系统架构)
-10. [实时监控仪表盘](#实时监控仪表盘)
-11. [常见故障排查](#常见故障排查)
-
----
-## 目录
 
 1. [系统要求](#系统要求)
 2. [克隆与构建](#克隆与构建)
 3. [一键启动](#一键启动)
 4. [怎么让无人机飞到指定位置](#怎么让无人机飞到指定位置)
-5. [地图与障碍物](#地图与障碍物)
-6. [控制器调参](#控制器调参)
-7. [规划器参数](#规划器参数)
-8. [录制实验数据](#录制实验数据)
-9. [系统架构](#系统架构)
-10. [目录结构](#目录结构)
-11. [实时监控仪表盘](#实时监控仪表盘)
-12. [常见故障排查](#常见故障排查)
+5. [轨迹生成器](#轨迹生成器)
+6. [地图与障碍物](#地图与障碍物)
+7. [控制器调参](#控制器调参)
+8. [规划器参数](#规划器参数)
+9. [风扰与传感器噪声](#风扰与传感器噪声)
+10. [录制实验数据](#录制实验数据)
+11. [系统架构](#系统架构)
+12. [目录结构](#目录结构)
+13. [实时监控仪表盘（地面站）](#实时监控仪表盘)
+14. [多无人机](#多无人机)
+15. [常见故障排查](#常见故障排查)
 
 ---
 
@@ -122,6 +111,35 @@ ros2 run drone_bringup waypoint_sender.py --ros-args -p hold_time:=4.0
 默认走 5 个点：(0,0,1.5) → (2,0,1.5) → (2,2,1.5) → (0,2,1.5) → (0,0,1.5)，每个点停 4 秒。  
 改航线：`-p waypoints:="[[0,0,1.5],[3,0,1.5],[3,3,1.5],[0,3,1.5]]"`  
 改停留时间：`-p hold_time:=6.0`
+
+---
+
+## 轨迹生成器
+
+参数化轨迹生成器，支持圆形、八字和航点列表，逐帧发布动态目标点。
+
+```bash
+# 圆形轨迹（半径 1m, 周期 10s）
+ros2 run drone_bringup trajectory_generator.py --ros-args -p type:=circle -p radius:=1.0 -p period:=10.0
+
+# 八字轨迹（Bernoulli lemniscate）
+ros2 run drone_bringup trajectory_generator.py --ros-args -p type:=lemniscate -p scale:=1.5 -p period:=15.0
+
+# 航点文件
+ros2 run drone_bringup trajectory_generator.py --ros-args -p type:=waypoints -p waypoint_file:=path/to/waypoints.json
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `type` | circle | `circle` / `lemniscate` / `waypoints` |
+| `rate` | 10.0 | 目标发布频率 Hz |
+| `period` | 10.0 | 轨迹一圈用时 s |
+| `radius` | 1.0 | 圆形半径 m |
+| `scale` | 1.5 | 八字尺度 m |
+| `cx/cy/cz` | 0/0/1.5 | 轨迹中心 |
+| `hold_time` | 3.0 | waypoint 模式每点停留时间 s |
+
+**注意**：轨迹生成器发布 `/drone/goal`，与规划器的 `safe_goal` 冲突。使用轨迹时请用 `no_planner.launch.py` 启动。
 
 ---
 
@@ -227,6 +245,54 @@ ros2 param set /drone_map num_obstacles 10
 
 ---
 
+## 风扰与传感器噪声
+
+通过地面站右侧面板或 `ros2 param set` 动态启用，无需重启。
+
+### 风扰
+
+模拟恒定风 + 正弦阵风 + Ornstein-Uhlenbeck 随机湍流。参数全部可 `ros2 param set` 热更新：
+
+```bash
+ros2 param set /drone_dynamics wind_enabled true
+ros2 param set /drone_dynamics wind_force "[2.0,0.0,0.0]"
+ros2 param set /drone_dynamics wind_gust_amplitude 1.0
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `wind_enabled` | false | 启用风扰 |
+| `wind_force` | [0,0,0] | 恒定风力 (N, 世界系) |
+| `wind_gust_amplitude` | 0.0 | 阵风幅值 (N) |
+| `wind_gust_period` | 2.0 | 阵风周期 (s) |
+
+控制器通过积分项 (`Ki_pos.x=0.5`) 和扰动观测器主动补偿风扰，关风后自动恢复原点。
+
+### 传感器噪声
+
+IMU 加速度计/陀螺仪偏置 + 白噪声 + 随机游走，以及 Odom 位置/速度加性噪声。
+
+```bash
+ros2 param set /drone_dynamics imu_noise_enabled true
+ros2 param set /drone_dynamics accel_noise_density 0.05
+ros2 param set /drone_dynamics gyro_noise_density 0.01
+ros2 param set /drone_dynamics accel_bias_init 0.1
+ros2 param set /drone_dynamics odom_pos_noise 0.02
+```
+
+| 参数 | 默认 | 含义 |
+|---|---|---|
+| `imu_noise_enabled` | false | 启用 IMU 噪声 |
+| `accel_noise_density` | 0.0 | 加速度计白噪声 σ (m/s²) |
+| `gyro_noise_density` | 0.0 | 陀螺仪白噪声 σ (rad/s) |
+| `accel_bias_init` / `gyro_bias_init` | 0 | 初始偏置 |
+| `accel_bias_rw` / `gyro_bias_rw` | 0 | 偏置随机游走 σ |
+| `odom_pos_noise` / `odom_vel_noise` | 0 | Odom 位置/速度噪声 σ |
+
+**注意**：TF 始终使用 ground truth，不受噪声影响。
+
+---
+
 ## 录制实验数据
 
 每个验收场景一条命令，自动录 bag + 打印数值摘要。
@@ -325,6 +391,7 @@ src/astesia_drone_sim/
 │   │   ├── mixer.hpp           #   控制分配矩阵 B / B⁻¹
 │   │   ├── math.hpp            #   四元数积分 / skew / vee
 │   │   ├── obstacle.hpp        #   障碍物结构 + 碰撞检测
+│   │   ├── noise.hpp           #   传感器噪声模型
 │   │   └── drone_common.hpp    #   聚合 include
 │   └── test/test_common.cpp    #   7 条 gtest 回归网
 ├── drone_dynamics/             # 动力学节点（1kHz）
@@ -349,11 +416,14 @@ src/astesia_drone_sim/
 ├── drone_bringup/              # 启动与工具
 │   ├── launch/
 │   │   ├── full.launch.py      #   完整系统（含规划器）
-│   │   └── no_planner.launch.py #  基础系统（无规划器）
-│   ├── config/（空——各节点 config 在自己包内）
+│   │   ├── no_planner.launch.py #  基础系统（无规划器）
+│   │   └── multi_drone.launch.py  #  多无人机启动
+│   ├── config/
+│   │   └── parameter_reference.yaml # 统一参数参考
 │   ├── rviz/drone.rviz         #   RViz 预设配置
 │   ├── scripts/
-│   │   ├── waypoint_sender.py  #   多航点顺序发送
+│   │   ├── waypoint_sender.py    #   多航点顺序发送
+│   │   ├── trajectory_generator.py #   参数化轨迹生成器
 │   │   ├── live_monitor.py      #   地面站（浏览器仪表盘+控制）
 │   │   ├── record_and_analyze.sh # 录 bag + 自动分析
 │   │   ├── plot_bag.py         #   bag → CSV + 数值摘要
