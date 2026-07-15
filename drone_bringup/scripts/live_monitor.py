@@ -246,54 +246,40 @@ function update(){
       c4.height=220;
       var w4=c4.width,h4=c4.height,ctx4=c4.getContext('2d');
       ctx4.clearRect(0,0,w4,h4);
-      // grid
       ctx4.strokeStyle='#21262d';ctx4.lineWidth=1;
       for(var i=0;i<=4;i++){ctx4.beginPath();ctx4.moveTo(0,h4*i/4);ctx4.lineTo(w4,h4*i/4);ctx4.stroke()}
       // ref line at 0.4
       ctx4.setLineDash([4,6]);ctx4.strokeStyle='#f85149';ctx4.lineWidth=1.5;
       var ry4=h4-0.4/2*h4;ctx4.beginPath();ctx4.moveTo(0,ry4);ctx4.lineTo(w4,ry4);ctx4.stroke();
-      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40',4,ry4-4);
-      // thin lines for each obstacle
-      for(var k=0;k<ads.length;k++){
-        ctx4.strokeStyle='rgba(139,148,158,0.3)';ctx4.lineWidth=0.8;ctx4.beginPath();
-        for(var i=0;i<d.min_d.length;i++){
-          var x4=i/d.min_d.length*w4,y4=h4-ads[k]/2*h4;
-          i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
-        }
-        ctx4.stroke();
+      ctx4.setLineDash([]);ctx4.fillStyle='#f85149';ctx4.font='10px sans-serif';ctx4.fillText('0.40m safety',4,ry4-4);
+      // distinct colors for each obstacle
+      var OBS_COLORS=['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff922b','#845ef7','#20c997','#f06595','#339af0','#fcc419','#94d82d','#5c7cfa','#ff8787','#74c0fc','#ffa94d','#da77f2'];
+      // thin lines for each obstacle (use raw distance, not min)
+      var allDist = d.all_d||[];
+      var hasData = d.all_d_raw || d.all_d;  // prefer raw distances if available
+      for(var k=0;k<allDist.length;k++){
+        ctx4.strokeStyle=OBS_COLORS[k % OBS_COLORS.length];ctx4.lineWidth=1.0;ctx4.beginPath();
+        // allDist[k] is the distance for this obstacle at the latest tick
+        // For time series: use d.min_d as time base, draw horizontal-ish line
+        // Actually allDist[k] is a SCALAR (current distance to obstacle k)
+        // To draw them differently: use the marker position distance (pre-subtraction)
+        // Since we only have post-subtraction: draw horizontal lines at y=value
+        var y4=h4-allDist[k]/2*h4;
+        ctx4.moveTo(0,y4);ctx4.lineTo(w4,y4);ctx4.stroke();
+        // label each line
+        ctx4.fillStyle=OBS_COLORS[k % OBS_COLORS.length];ctx4.font='8px sans-serif';
+        ctx4.fillText(k,2,y4-2);
       }
-      // thick line for minimum
+      // thick green line for minimum
       ctx4.strokeStyle='#3fb950';ctx4.lineWidth=2.5;ctx4.beginPath();
       for(var i=0;i<d.min_d.length;i++){
         var x4=i/d.min_d.length*w4,y4=h4-d.min_d[i]/2*h4;
         i==0?ctx4.moveTo(x4,y4):ctx4.lineTo(x4,y4);
       }
       ctx4.stroke();
-      // axis labels
       ctx4.fillStyle='#8b949e';ctx4.font='10px sans-serif';
       for(var i=0;i<=4;i++){ctx4.fillText((2-0.5*i).toFixed(1),2,h4*i/4+10)}
-      ctx4.fillStyle='#58a6ff';ctx4.fillText('dist(m) green=min grey=each',4,12);
-    }
-
-    // trajectory
-    (function(){
-      var c=document.getElementById('ctj');
-      c.width=Math.max(500,c.parentElement.clientWidth-24);
-      c.height=c.width*0.5;
-      var w=c.width,h=c.height,ctx=c.getContext('2d');
-      ctx.clearRect(0,0,w,h);
-      ctx.strokeStyle='#21262d';ctx.lineWidth=1;
-      for(var g=-1;g<=4;g++){var gx=(g+1)/6*w;ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,h);ctx.stroke()}
-      for(var g=-1;g<=4;g++){var gy=h-(g+1)/6*h;ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(w,gy);ctx.stroke()}
-      var wx=function(v){return (v+1)/6*w}, wy=function(v){return h-(v+1)/6*h};
-      if(n>0){
-        ctx.fillStyle='#58a6ff';ctx.font='16px sans-serif';ctx.fillText('+',wx(d.px[0])-5,wy(d.py[0])+5);
-        ctx.fillStyle='#f85149';ctx.font='16px sans-serif';ctx.fillText('+',wx(d.goal_x)-5,wy(d.goal_y)+5);
-      }
-      if(n>1){ctx.strokeStyle='#3fb950';ctx.lineWidth=2;ctx.beginPath();
-        for(var i=0;i<n;i++){i==0?ctx.moveTo(wx(d.px[i]),wy(d.py[i])):ctx.lineTo(wx(d.px[i]),wy(d.py[i]))}
-        ctx.stroke()}
-      ctx.fillStyle='#8b949e';ctx.font='10px sans-serif';ctx.fillText('XY (+start +goal)',4,12);
+      ctx4.fillStyle='#58a6ff';ctx4.fillText('obs dist(m) green=min colored=each',4,12);
     })();
   })
 }
