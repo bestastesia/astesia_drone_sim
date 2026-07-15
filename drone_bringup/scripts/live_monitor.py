@@ -317,7 +317,16 @@ setInterval(update,500);
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/':
+        if self.path == '/debug':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain;charset=utf-8')
+            self.end_headers()
+            with lk:
+                self.wfile.write(('obs_count=%d min_d=%d all_d=%d rpm=%d px=%d' % (
+                    len(st.get('obs',[])), len(st.get('min_d',[])),
+                    len(st.get('all_d',[])), len(st['rpm'][0]) if st.get('rpm') and st['rpm'][0] else 0,
+                    len(st.get('px',[])))).encode())
+        elif self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html;charset=utf-8')
             self.end_headers()
@@ -334,6 +343,13 @@ class Handler(BaseHTTPRequestHandler):
                 # 确保 goal 默认值非 0（控制器默认 hover z=1.5）
                 if not d.get('goal_z'):
                     d['goal_z'] = 1.5
+            d['_dbg'] = {
+                'obs_count': len(st.get('obs', [])),
+                'min_d_len': len(st.get('min_d', [])),
+                'all_d_len': len(st.get('all_d', [])),
+                'rpm_len': len(st['rpm'][0]) if st.get('rpm') and st['rpm'][0] else 0,
+                'px_len': len(st.get('px', [])),
+            }
             self.wfile.write(json.dumps(d).encode())
         else:
             self.send_response(404)
