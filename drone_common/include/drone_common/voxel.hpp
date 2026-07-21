@@ -117,8 +117,23 @@ class VoxelGrid {
     }
   }
 
-  // ====================================================================
-  // FOV 锥体感知: 从 origin 沿 direction 方向, 返回可见的 3D grid 切片
+  // 用 cube 标记（轴对齐立方体）
+  void markCube(const Vec3d& center, const Vec3d& half_extents,
+                double inflation) {
+    Vec3d he = half_extents + Vec3d(inflation, inflation, inflation);
+    Vec3i gc_min = worldToGrid(center - he);
+    Vec3i gc_max = worldToGrid(center + he);
+    for (int z = gc_min.z(); z <= gc_max.z(); ++z)
+      for (int y = gc_min.y(); y <= gc_max.y(); ++y)
+        for (int x = gc_min.x(); x <= gc_max.x(); ++x)
+          if (inBounds(x, y, z)) at(x, y, z) = 1;
+  }
+
+  // 清空全部栅格
+  void clear() { std::fill(cells_.begin(), cells_.end(), 0); }
+
+  // 获取所有存在的障碍物并标记到体素栅格
+  // 所有模式共用此步骤
   // ====================================================================
   // fov_h: 水平视场角 (rad)
   // fov_v: 垂直视场角 (rad)
@@ -153,13 +168,8 @@ class VoxelGrid {
           // Check if within FOV cone
           Vec3d to_norm = to_cell.normalized();
           double cos_angle = to_norm.dot(dir_norm);
-          // Project onto horizontal and vertical
-          double h_angle = std::acos(std::max(-1.0, std::min(1.0, cos_angle)));
-          if (h_angle > std::max(half_h, half_v)) continue;
-
-          // Simple cone check: angle between direction and to_cell
-          if (std::acos(std::max(-1.0, std::min(1.0, cos_angle))) >
-              std::max(half_h, half_v)) continue;
+          double angle = std::acos(std::max(-1.0, std::min(1.0, cos_angle)));
+          if (angle > std::max(half_h, half_v)) continue;
 
           result.visible[index(x, y, z)] = 1;
         }

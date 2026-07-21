@@ -207,6 +207,17 @@ button{cursor:pointer}button:hover{background:#21262d}
 <button class="btn-preset" onclick="preset('targetA')">&#x1f3af; (2,1,1.5)</button>
 <button class="btn-preset" onclick="preset('square')">&#x25a1; (2,2,1.5)</button>
 <button class="btn-preset" onclick="preset('up')">&#x2b06; (0,0,3)</button></div>
+	<div class="panel"><h3>&#x1f50d; Perception &amp; Planning</h3>
+	<div class="row"><label>Mode</label><select id="perception_mode" onchange="setPerceptionMode()"><option value="global">Global</option><option value="fov">FOV</option></select></div>
+	<div class="row"><label>Dim</label><select id="planner_dim" onchange="setPlannerDim()"><option value="2d">2D A*</option><option value="3d">3D A*</option></select></div>
+	<div class="divider"></div>
+	<div class="row"><label>FOV H (&deg;)</label><span class="val" id="sv_fovh">60</span></div>
+	<input type="range" id="fov_h" min="10" max="180" step="5" value="60" oninput="onFOVSlider()">
+	<div class="row"><label>FOV V (&deg;)</label><span class="val" id="sv_fovv">45</span></div>
+	<input type="range" id="fov_v" min="10" max="120" step="5" value="45" oninput="onFOVSlider()">
+	<div class="row"><label>Range (m)</label><span class="val" id="sv_fovr">5.0</span></div>
+	<input type="range" id="fov_range" min="1" max="10" step="0.5" value="5" oninput="onFOVSlider()">
+	<div class="fb" id="percep-fb"></div></div>
 <div class="panel"><h3>&#x2699; Controller Tuning</h3>
 <div id="sliders"></div>
 <button onclick="applyParams()" style="width:100%;margin-top:4px;background:#1f6feb;color:#fff;font-weight:bold">Apply All</button>
@@ -283,6 +294,27 @@ var PRESETS={home:{x:0,y:0,z:1.5},targetA:{x:2,y:1,z:1.5},square:{x:2,y:2,z:1.5}
 function preset(n){var p=PRESETS[n];if(!p)return;document.getElementById('gx').value=p.x;document.getElementById('gy').value=p.y;document.getElementById('gz').value=p.z;sendGoal()}
 function sendGoal(){var x=parseFloat(document.getElementById('gx').value)||0;var y=parseFloat(document.getElementById('gy').value)||0;var z=parseFloat(document.getElementById('gz').value)||1.5;var fb=document.getElementById('goal-fb');fb.textContent='sending...';fetch('/goal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:x,y:y,z:z})}).then(function(r){return r.json()}).then(function(j){fb.textContent=j.ok?'sent ('+x.toFixed(1)+','+y.toFixed(1)+','+z.toFixed(1)+')':'FAIL: '+j.error;setTimeout(function(){fb.textContent=''},3000)}).catch(function(e){fb.textContent='ERROR: '+e})}
 function emergency(a){var fb=document.getElementById('emerg-fb');fb.textContent='sending...';fetch('/emergency',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})}).then(function(r){return r.json()}).then(function(j){fb.textContent=j.ok?'done: '+a:'FAIL: '+j.error;setTimeout(function(){fb.textContent=''},3000)}).catch(function(e){fb.textContent='ERROR: '+e})}
+
+function setPerceptionMode(){
+  var m=document.getElementById('perception_mode').value;
+  applyParam('/drone_planner','perception_mode',m);
+  var fb=document.getElementById('percep-fb');
+  fb.textContent='mode='+m;setTimeout(function(){fb.textContent=''},2000);
+}
+function setPlannerDim(){
+  var d=document.getElementById('planner_dim').value;
+  applyParam('/drone_planner','planner_dim',d);
+  var fb=document.getElementById('percep-fb');
+  fb.textContent='dim='+d;setTimeout(function(){fb.textContent=''},2000);
+}
+function onFOVSlider(){
+  var h=document.getElementById('fov_h');document.getElementById('sv_fovh').textContent=h.value;
+  var v=document.getElementById('fov_v');document.getElementById('sv_fovv').textContent=v.value;
+  var r=document.getElementById('fov_range');document.getElementById('sv_fovr').textContent=parseFloat(r.value).toFixed(1);
+  applyParam('/drone_planner','fov_h_deg',parseFloat(h.value));
+  applyParam('/drone_planner','fov_v_deg',parseFloat(v.value));
+  applyParam('/drone_planner','fov_range',parseFloat(r.value));
+}
 var PARAMS={'Kp_pos.x':{min:0.1,max:10,step:0.1,def:2.0},'Kp_pos.z':{min:0.5,max:15,step:0.1,def:3.0},'Kd_pos.x':{min:0,max:6,step:0.1,def:2.0},'Kd_pos.z':{min:0,max:8,step:0.1,def:2.4},'Kp_att.x':{min:1,max:30,step:0.5,def:8},'Kd_rate.x':{min:0.1,max:5,step:0.1,def:0.8},'a_xy_max':{min:1,max:12,step:0.5,def:4.0},'a_z_max':{min:1,max:15,step:0.5,def:6.0}};
 (function(){var h='';for(var k in PARAMS){var p=PARAMS[k];var id='sl_'+k.replace(/\./g,'_');h+='<div class=row><label>'+k+'</label><span class=val id=sv_'+k.replace(/\./g,'_')+'>'+p.def.toFixed(1)+'</span></div>';h+='<input type=range id='+id+' min='+p.min+' max='+p.max+' step='+p.step+' value='+p.def+' oninput="var e=document.getElementById(\'sv_'+k.replace(/\./g,'_')+'\');var s=document.getElementById(\''+id+'\');if(e&&s)e.textContent=parseFloat(s.value).toFixed(1)">'}document.getElementById('sliders').innerHTML=h})();
 function applyParams(){var fb=document.getElementById('param-fb');var jobs=[];for(var k in PARAMS){var el=document.getElementById('sl_'+k.replace(/\./g,'_'));if(el)jobs.push({node:'/drone_controller',param:k,value:parseFloat(el.value)})}if(!jobs.length)return;fb.textContent='applying '+jobs.length+' params...';var i=0;function nxt(){if(i>=jobs.length){fb.textContent='done!';setTimeout(function(){fb.textContent=''},3000);return}var p=jobs[i];fetch('/param',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}).then(function(r){return r.json()}).then(function(j){if(!j.ok)fb.textContent='FAIL: '+p.param;i++;nxt()}).catch(function(e){fb.textContent='ERROR: '+e})}nxt()}

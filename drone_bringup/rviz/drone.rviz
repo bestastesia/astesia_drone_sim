@@ -34,6 +34,12 @@ Visualization Manager:
     - Class: rviz_default_plugins/Marker
       Name: Safe Goal
       Topic: /drone/safe_goal
+    - Class: rviz_default_plugins/Marker
+      Name: FOV Cone
+      Topic: /drone/fov_cone
+    - Class: rviz_default_plugins/MarkerArray
+      Name: FOV Voxels
+      Topic: /drone/fov_voxels
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
