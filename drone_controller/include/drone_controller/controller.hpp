@@ -38,17 +38,11 @@ using drone_common::Wrench;
 using drone_common::MotorSq;
 
 struct Params {
-  // 位置环 PID
-  Vec3d Kp_pos{3.0, 3.0, 5.0};   // P
-  Vec3d Kd_pos{1.5, 1.5, 2.5};   // D
-  Vec3d Ki_pos{0, 0, 0};         // I（默认禁用，加才有防饱和）
-  double Ki_max = 1.0;            // I 上限
-
-  // 非线性 P（用户设计）
-  double kp2 = 0.2;               // 非线性增益增长率（0=退化为线性P）
-  double confine = 2.0;           // P 线性区阈值 m
-  double kispeed = 1.0;           // 积分分离速度（越大越快衰减）
-  double error_scale = 1.0;       // 误差放大系数
+  // 位置环 PID — V2 简化线性 PD + 强积分
+  Vec3d Kp_pos{2.0, 2.0, 3.0};   // P（匹配 controller.yaml）
+  Vec3d Kd_pos{2.0, 2.0, 2.4};   // D（匹配 controller.yaml，ζ≈0.7）
+  Vec3d Ki_pos{0.5, 0.0, 0.0};   // I: x轴稳态风扰补偿
+  double Ki_max = 2.0;            // I 上限（m/s²）
 
   // 加速度限幅
   double a_xy_max = 5.0;          // 水平 m/s²
@@ -135,70 +129,46 @@ class DroneController {
     if (params_.control_mode == "ladrc") {
       a_des = ladrc_.step(odom_p, goal_p);
     } else {
-      // ===== 用户设计的非线性 PID（逐轴） =====
+      // ===== 线性 PD + 有限积分 + 死区 =====
+      // 死区：0.05m 内不积分，避免小误差积分饱和
+      // 防饱和：只在 PD 输出不超限幅时才累加积分
       double dt = params_.ctrl_dt;
-      if (dt < 0.0001) dt = 0.005;  // safeguard
+      if (dt < 0.0001) dt = 0.005;
 
       for (int axis = 0; axis < 3; ++axis) {
-        double e = params_.error_scale * ep[axis];
+        double e = ep[axis];
         double abs_e = std::abs(e);
 
-        // ---- 非线性 P ----
-        // kp_eff(|e|) = (Kp+1)·exp((|e|-confine)·kp2) - 1
-        //   在 |e|=confine 处: kp_eff = Kp  → 与原始线性增益一致
-        //   在 |e|=0 处:      kp_eff = (Kp+1)·exp(-confine·kp2) - 1
-        //   合理约束: confine·kp2 = ln2 ≈ 0.693 → 零误差处 P 减半
-        double kp_eff = (params_.Kp_pos[axis] + 1.0) * std::exp((abs_e - params_.confine) * params_.kp2) - 1.0;
+        // ---- 线性 PD ----
+        double out_pd = params_.Kp_pos[axis] * e
+                      + params_.Kd_pos[axis] * (-odom_v[axis]);  // v_des=0
 
-        // ---- 积分分离：指数衰减 ----
-        double ki_eff = params_.Ki_pos[axis] * std::exp(-params_.kispeed * abs_e);
-
-        // ---- 不完全微分（一阶低通） ----
-        double raw_deriv = (e - prev_error_[axis]) / dt;
-        double deriv = raw_deriv * 0.5 + prev_deriv_[axis] * 0.5;
-
-        // ---- 梯形积分增量 ----
-        double once_i = ki_eff * 0.5 * (e + prev_error_[axis]) * dt;
-
-        // ---- 不含积分的输出 ----
-        double out_no_i = kp_eff * e + params_.Kd_pos[axis] * deriv;
-
-        // ---- 遇限削弱积分 (conditional anti-windup) ----
-        double out = out_no_i + integral_[axis];
+        // ---- 积分项：死区 + 防饱和 ----
         double clamp_min = (axis == 2) ? params_.a_z_min : -params_.a_xy_max;
         double clamp_max = (axis == 2) ? params_.a_z_max : params_.a_xy_max;
 
-        bool in_bounds = (out > clamp_min && out < clamp_max);
-        if (in_bounds) {
-          // 输出未饱和 → 正常累加积分
-          integral_[axis] += once_i;
-          out += once_i;
-          // 累加后可能过界，clamp 回去并反算积分
-          if (out > clamp_max) {
-            double excess = out - clamp_max;
-            integral_[axis] -= excess;
-            out = clamp_max;
-          } else if (out < clamp_min) {
-            double excess = out - clamp_min;
-            integral_[axis] -= excess;
-            out = clamp_min;
-          }
-        } else if ((out >= clamp_max && once_i < 0.0) ||
-                   (out <= clamp_min && once_i > 0.0)) {
-          // 已饱和但积分方向对抗饱和 → 可累加
-          integral_[axis] += once_i;
-          out += once_i;
+        // 死区：小误差时不积分（0.05m 死区）
+        // 防饱和：只有 PD 输出 + 现有积分 不超限幅时，才累加积分
+        double candidate_out = out_pd + integral_[axis];
+        if (abs_e > 0.02 && candidate_out > clamp_min && candidate_out < clamp_max) {
+          // 方向一致性检查：误差符号和积分符号一致时才累加（防止反向积分对抗 PD 刹车）
+          double ki_gain = params_.Ki_pos[axis];
+          // 接近目标时积分更强，远处积分更弱（软切换）
+          if (abs_e > 0.5) ki_gain *= std::exp(-2.0 * (abs_e - 0.5));
+          integral_[axis] += ki_gain * e * dt;
+        } else if (abs_e <= 0.02) {
+          // 极小区间：缓慢衰减积分（每次衰减 1%）
+          integral_[axis] *= 0.99;
+        } else if ((candidate_out >= clamp_max && e < 0.0) ||
+                   (candidate_out <= clamp_min && e > 0.0)) {
+          // 饱和但误差方向对抗饱和 → 可积分
+          integral_[axis] += params_.Ki_pos[axis] * e * dt;
         }
-        // else: 已饱和且积分方向推动更饱和 → 跳过积分累加
 
         // 积分限幅
         integral_[axis] = std::clamp(integral_[axis], -params_.Ki_max, params_.Ki_max);
 
-        // 保存状态
-        prev_error_[axis] = e;
-        prev_deriv_[axis] = deriv;
-
-        a_des[axis] = out;
+        a_des[axis] = std::clamp(out_pd + integral_[axis], clamp_min, clamp_max);
       }
     }
 
