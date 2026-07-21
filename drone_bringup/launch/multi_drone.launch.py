@@ -37,7 +37,7 @@ def generate_launch_description():
                  name='drone_dynamics', output='screen', parameters=dyn_params),
             Node(package='drone_controller', executable='controller_node',
                  name='drone_controller', output='screen', parameters=[ctrl_yaml],
-                 remappings=[('/drone/safe_goal', '/drone/goal')]),
+                 remappings=[('drone/safe_goal', 'drone/goal')]),
         ])
 
     return LaunchDescription([
