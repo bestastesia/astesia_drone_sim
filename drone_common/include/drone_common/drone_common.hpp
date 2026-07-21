@@ -8,3 +8,4 @@
 #include "drone_common/math.hpp"
 #include "drone_common/obstacle.hpp"
 #include "drone_common/noise.hpp"
+#include "drone_common/voxel.hpp"
