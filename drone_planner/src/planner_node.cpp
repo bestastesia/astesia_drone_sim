@@ -4,7 +4,7 @@
 // 输出 /drone/safe_goal (前方 waypoint)
 //       /drone/planned_path (完整 A* 路径)
 //       /drone/planner_status
-//       /drone/fov_cone (TRIANGLE_LIST — FOV 锥体)
+//       /drone/fov_cone (LINE_LIST — FOV 锥体)
 //       /drone/fov_voxels (CUBE_LIST — FOV 可见体素)
 
 #include <memory>
@@ -47,13 +47,13 @@ class PlannerNode : public rclcpp::Node {
     declare_parameter<std::string>("grid_frame", "map");
 
     // ---- 感知参数 (热切换) ----
-    declare_parameter<std::string>("perception_mode", "global");  // "global" | "fov"
-    declare_parameter<std::string>("planner_dim", "2d");          // "2d" | "3d"
-    declare_parameter<double>("fov_h_deg", 60.0);   // 水平视场角 (°)
-    declare_parameter<double>("fov_v_deg", 45.0);   // 垂直视场角 (°)
-    declare_parameter<double>("fov_range", 5.0);    // 感知距离 m
-    declare_parameter<double>("voxel_resolution", 0.2); // 体素分辨率 m
-    declare_parameter<std::vector<double>>("z_bounds", {0.0, 4.0}); // 体素 z 范围
+    declare_parameter<std::string>("perception_mode", "global");
+    declare_parameter<std::string>("planner_dim", "2d");
+    declare_parameter<double>("fov_h_deg", 60.0);
+    declare_parameter<double>("fov_v_deg", 45.0);
+    declare_parameter<double>("fov_range", 5.0);
+    declare_parameter<double>("voxel_resolution", 0.2);
+    declare_parameter<std::vector<double>>("z_bounds", {0.0, 4.0});
 
     loadBaseParams();
     loadPerceptionConfig();
@@ -61,7 +61,6 @@ class PlannerNode : public rclcpp::Node {
     double replan_rate = get_parameter("replan_rate").as_double();
     int period_ms = static_cast<int>(1000.0 / replan_rate);
 
-    // 感知引擎
     engine_ = std::make_unique<drone_planner::PerceptionEngine>(perc_cfg_);
 
     // 订阅
@@ -87,7 +86,6 @@ class PlannerNode : public rclcpp::Node {
     replan_timer_ = create_wall_timer(
         std::chrono::milliseconds(period_ms), [this]() { replan(); });
 
-    // 参数变更回调（热切换感知模式）
     param_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params) {
           for (const auto& p : params) {
@@ -165,7 +163,6 @@ class PlannerNode : public rclcpp::Node {
     double py = odom->pose.pose.position.y;
     double pz = odom->pose.pose.position.z;
 
-    // 无人机 forward（从四元数提取机身 +x），默认 (1,0,0)
     Vec3d drone_pos(px, py, pz);
     Vec3d drone_fwd(1, 0, 0);
     {
@@ -176,11 +173,11 @@ class PlannerNode : public rclcpp::Node {
       Eigen::Quaterniond q(qw, qx, qy, qz);
       if (std::isfinite(qw) && q.norm() > 1e-9) {
         q.normalize();
-        drone_fwd = q.toRotationMatrix().col(0);  // 机身 +x
+        drone_fwd = q.toRotationMatrix().col(0);
       }
     }
 
-    // 目标默认
+    // 目标
     double gx = px, gy = py, gz = cruise_z_;
     if (goal) {
       gx = goal->pose.position.x;
@@ -190,7 +187,7 @@ class PlannerNode : public rclcpp::Node {
     }
     double z_cruise = use_goal_z_ ? gz : cruise_z_;
 
-    // 构建障碍物列表
+    // 障碍物列表
     std::vector<Obstacle> obstacles;
     if (obs) {
       for (const auto& m : obs->markers) {
@@ -222,31 +219,27 @@ class PlannerNode : public rclcpp::Node {
 
     // ===== 四模式路由 =====
     if (perc_cfg_.dim == drone_planner::PlannerDim::THREE_D) {
-      // ============ 3D A* ============
+      // ------------ 3D A* ------------
       engine_->config() = perc_cfg_;
       engine_->rebuild(obstacles, inflate);
 
       // 起点保护
-      {
-        Vec3i sg = engine_->voxelGrid().worldToGrid(drone_pos);
-        for (int dz = -1; dz <= 1; ++dz)
-          for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx)
-              if (engine_->voxelGrid().inBounds(sg.x()+dx, sg.y()+dy, sg.z()+dz))
-                const_cast<drone_common::VoxelGrid&>(engine_->voxelGrid())
-                    .at(sg.x()+dx, sg.y()+dy, sg.z()+dz) = 0;
-      }
+      Vec3i sg = engine_->voxelGrid().worldToGrid(drone_pos);
+      for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+          for (int dx = -1; dx <= 1; ++dx)
+            if (engine_->voxelGrid().inBounds(sg.x()+dx, sg.y()+dy, sg.z()+dz))
+              const_cast<drone_common::VoxelGrid&>(engine_->voxelGrid())
+                  .at(sg.x()+dx, sg.y()+dy, sg.z()+dz) = 0;
 
       const auto& grid3d = engine_->activeGrid3D(drone_pos, drone_fwd);
       Vec3d goal3d(gx, gy, z_cruise);
-
       auto path3d = drone_planner::astarSearch3D(grid3d, drone_pos, goal3d);
       if (path3d.empty()) { publishStatus("NO_PATH"); return; }
 
-      // 3D 路径 → 发布 planned_path (z 随航点变化)
       publishPath3D(path3d);
 
-      // safe_goal: 沿 3D 路径单调推进
+      // safe_goal 单调推进 (3D)
       double best_dist = 1e9; int closest_i = 0;
       for (int i = 0; i < static_cast<int>(path3d.size()); ++i) {
         double d = (path3d[i] - drone_pos).norm();
@@ -263,7 +256,7 @@ class PlannerNode : public rclcpp::Node {
       publishSafeGoal(path3d[last_look_i_].x(), path3d[last_look_i_].y(), path3d[last_look_i_].z());
 
     } else {
-      // ============ 2D A* ============
+      // ------------ 2D A* ------------
       auto grid2d = engine_->buildGrid2D(
           obstacles, resolution_, bounds_[0], bounds_[1], bounds_[2], bounds_[3],
           inflate, z_cruise, drone_pos, drone_fwd);
@@ -280,11 +273,12 @@ class PlannerNode : public rclcpp::Node {
       auto path = drone_planner::astarSearch(grid2d, px, py, gx, gy);
       if (path.empty()) { publishStatus("NO_PATH"); return; }
 
+      // Log and publish planned_path
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
           "planned_path: %zu waypoints (smoothed)", path.size());
-
       publishPath(path, z_cruise);
 
+      // safe_goal monotonically advance (same logic as v1.0)
       double best_dist = 1e9; int closest_i = 0;
       for (int i = 0; i < static_cast<int>(path.size()); ++i) {
         double d = std::hypot(path[i].x() - px, path[i].y() - py);
@@ -314,7 +308,6 @@ class PlannerNode : public rclcpp::Node {
   // ---- FOV 锥体 + 体素可视化 ----
   void publishFOVVisual(double px, double py, double pz, const Vec3d& drone_fwd) {
     if (perc_cfg_.mode != drone_planner::PerceptionMode::FOV) {
-      // 全局模式 → 清空 FOV 可视化
       visualization_msgs::msg::Marker del;
       del.action = visualization_msgs::msg::Marker::DELETE;
       del.ns = "fov_cone"; del.id = 0; fov_cone_pub_->publish(del);
@@ -329,7 +322,7 @@ class PlannerNode : public rclcpp::Node {
 
     auto fov = engine_->queryFOV(Vec3d(px, py, pz), drone_fwd);
 
-    // 锥体 (TRIANGLE_LIST — 简化为金字塔四条边)
+    // FOV 锥体 (LINE_LIST)
     {
       visualization_msgs::msg::Marker cone;
       cone.header.stamp = now(); cone.header.frame_id = grid_frame_;
@@ -337,23 +330,20 @@ class PlannerNode : public rclcpp::Node {
       cone.type = visualization_msgs::msg::Marker::LINE_LIST;
       cone.action = visualization_msgs::msg::Marker::ADD;
       cone.color.r = 0.0f; cone.color.g = 1.0f; cone.color.b = 1.0f; cone.color.a = 0.3f;
-      cone.scale.x = 0.03;  // line width
+      cone.scale.x = 0.03;
 
       double half_h = perc_cfg_.fov_h_rad * 0.5;
       double half_v = perc_cfg_.fov_v_rad * 0.5;
       double rng = perc_cfg_.fov_range;
 
-      // 四个角点
       Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(Vec3d(1, 0, 0), drone_fwd);
       auto rot = [&](double ha, double va) -> Vec3d {
         Vec3d v(rng, rng * std::tan(ha), rng * std::tan(va));
         return Vec3d(px, py, pz) + q.toRotationMatrix() * v;
       };
       Vec3d apex(px, py, pz);
-      Vec3d tl = rot(half_h, half_v);
-      Vec3d tr = rot(-half_h, half_v);
-      Vec3d bl = rot(half_h, -half_v);
-      Vec3d br = rot(-half_h, -half_v);
+      Vec3d tl = rot(half_h, half_v), tr = rot(-half_h, half_v);
+      Vec3d bl = rot(half_h, -half_v), br = rot(-half_h, -half_v);
 
       auto add_l = [&](const Vec3d& a, const Vec3d& b) {
         geometry_msgs::msg::Point pa, pb;
@@ -363,13 +353,12 @@ class PlannerNode : public rclcpp::Node {
       };
       add_l(apex, tl); add_l(apex, tr); add_l(apex, bl); add_l(apex, br);
       add_l(tl, tr); add_l(tr, br); add_l(br, bl); add_l(bl, tl);
-
       fov_cone_pub_->publish(cone);
     }
 
-    // 可见体素 (CUBE_LIST — 绿色半透明，稀疏发布 0.5Hz)
+    // FOV 可见体素 (CUBE_LIST, 0.5Hz)
     static int voxel_frame_cnt = 0;
-    if (++voxel_frame_cnt % 2 != 0) return;  // 1Hz → 0.5Hz
+    if (++voxel_frame_cnt % 2 != 0) return;
 
     visualization_msgs::msg::MarkerArray arr;
     visualization_msgs::msg::Marker vm;
@@ -381,8 +370,8 @@ class PlannerNode : public rclcpp::Node {
     vm.scale.x = vm.scale.y = vm.scale.z = perc_cfg_.voxel_res * 0.9;
 
     size_t cnt = 0;
-    for (int z = 0; z < fov.nz && cnt < 5000; ++z) {
-      for (int y = 0; y < fov.ny && cnt < 5000; ++y) {
+    for (int z = 0; z < fov.nz && cnt < 5000; ++z)
+      for (int y = 0; y < fov.ny && cnt < 5000; ++y)
         for (int x = 0; x < fov.nx && cnt < 5000; ++x) {
           size_t idx = x + fov.nx * (y + fov.ny * z);
           if (fov.visible[idx] && engine_->voxelGrid().at(x, y, z) == 1) {
@@ -393,12 +382,11 @@ class PlannerNode : public rclcpp::Node {
             ++cnt;
           }
         }
-      }
-    }
     arr.markers.push_back(vm);
     fov_voxels_pub_->publish(arr);
   }
 
+  // ---- 辅助发布函数 ----
   void publishStatus(const std::string& s) {
     auto msg = std_msgs::msg::String(); msg.data = s;
     status_pub_->publish(msg);
@@ -440,7 +428,7 @@ class PlannerNode : public rclcpp::Node {
     last_path_size_ = path.size();
   }
 
-  // 参数
+  // ---- 成员变量 ----
   double resolution_, safety_dist_, drone_r_, cruise_z_, lookahead_, advance_tol_;
   bool use_goal_z_;
   std::vector<double> bounds_;
