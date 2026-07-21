@@ -12,6 +12,7 @@ install(DIRECTORY launch config rviz scripts
 install(PROGRAMS
   scripts/waypoint_sender.py
   scripts/trajectory_generator.py
+  scripts/auto_eval.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
