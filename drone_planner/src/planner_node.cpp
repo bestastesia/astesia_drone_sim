@@ -175,11 +175,19 @@ class PlannerNode : public rclcpp::Node {
       if (d < best_dist) { best_dist = d; closest_i = i; }
     }
 
-    // 单调推进：safe_goal 永远取 closest+1，但引入 last_look_i 保证不回退
-    int candidate = std::min(closest_i + 1, static_cast<int>(path.size()) - 1);
-    if (candidate > last_look_i_) last_look_i_ = candidate;
-    else if (closest_i >= static_cast<int>(path.size()) - 1)
-      last_look_i_ = static_cast<int>(path.size()) - 1;  // at goal, stay
+    // 单调推进：限制每次最多前进 1 个航点，防止 safe_goal 跳跃到终点
+    // (当 path 只有 2 个点时，closest_i+1 直接 = n-1 = 目标位置)
+    int n = static_cast<int>(path.size()) - 1;
+    if (closest_i >= n) {
+      last_look_i_ = n;  // at goal, stay
+    } else {
+      // Advance at most 1 waypoint per replan (1 second)
+      int target = std::min(closest_i + 1, n);
+      int advance = std::min(last_look_i_ + 1, target);
+      if (advance > last_look_i_) last_look_i_ = advance;
+      // Clamp: never exceed path bounds
+      if (last_look_i_ > n) last_look_i_ = n;
+    }
 
     publishSafeGoal(path[last_look_i_].x(), path[last_look_i_].y(), z_cruise);
 

@@ -26,6 +26,10 @@ drone_controller:
     Kd_pos: [2.0, 2.0, 2.4]
     Ki_pos: [0.5, 0.0, 0.0]     # x 轴积分项 — 消除风扰/外力稳态误差
     Ki_max: 2.0                   # 积分限幅@2 m/s²（对抗2N风@1kg质量）
+    kp2: 0.7                        # 非线性P增长率 confine*kp2≈0.693→零误差处P减半
+    confine: 1.0                   # P线性区阈值 m
+    kispeed: 2.0                   # 积分分离: exp(-2|e|) → |e|=0.5m时36%、|e|=1.5m时5%
+    error_scale: 1.0               # 误差放大系数（>1更激进）
     a_xy_max: 4.0
     a_z_min: -3.0
     a_z_max: 6.0

@@ -76,6 +76,10 @@ class ControllerNode : public rclcpp::Node {
     declare_parameter<std::vector<double>>("Kd_pos", {2.0, 2.0, 2.4});
     declare_parameter<std::vector<double>>("Ki_pos", {0.0, 0.0, 0.0});
     declare_parameter<double>("Ki_max", 1.0);
+    declare_parameter<double>("kp2", 0.2);
+    declare_parameter<double>("confine", 2.0);
+    declare_parameter<double>("kispeed", 1.0);
+    declare_parameter<double>("error_scale", 1.0);
     declare_parameter<double>("a_xy_max", 4.0);
     declare_parameter<double>("a_z_min", -3.0);
     declare_parameter<double>("a_z_max", 6.0);
@@ -115,6 +119,10 @@ class ControllerNode : public rclcpp::Node {
     if (kpa.size() == 3) p.Kp_att << kpa[0], kpa[1], kpa[2];
     if (kdr.size() == 3) p.Kd_rate << kdr[0], kdr[1], kdr[2];
     p.Ki_max = get_parameter("Ki_max").as_double();
+    p.kp2 = get_parameter("kp2").as_double();
+    p.confine = get_parameter("confine").as_double();
+    p.kispeed = get_parameter("kispeed").as_double();
+    p.error_scale = get_parameter("error_scale").as_double();
     p.a_xy_max = get_parameter("a_xy_max").as_double();
     p.a_z_min = get_parameter("a_z_min").as_double();
     p.a_z_max = get_parameter("a_z_max").as_double();

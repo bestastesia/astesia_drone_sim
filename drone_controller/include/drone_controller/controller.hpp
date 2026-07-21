@@ -1,11 +1,19 @@
 #pragma once
 //
-// controller.hpp — 级联 PD 位置控制器 + mixer 逆（纯 C++，不依赖 ROS）
+// controller.hpp — 非线性 PID 位置控制器 + mixer 逆（纯 C++，不依赖 ROS）
 // ----------------------------------------------------------------------
+// PID 设计移植自用户的 Python 实现，核心特性：
+//   1. 非线性 P：exp(Kp + (|e|-confine)*Kp2) - 1  逐轴
+//   2. 积分分离：Ki_eff = Ki * exp(-kispeed/100 * |e|)  逐轴
+//   3. 遇限削弱积分 (conditional anti-windup)
+//   4. 梯形积分：0.5*(e+e_prev)*dt
+//   5. 不完全微分：一阶低通平滑导数项
+//   6. 误差缩放：error_scale
+//
 // 输入：当前 odom (p, v, q, w_body) + 目标 PoseStamped (p_goal, yaw_goal)
 // 输出：4 个期望 RPM
 // 控制律：
-//   1. 位置 PD → 期望世界加速度 a_des
+//   1. 位置 PID → 期望世界加速度 a_des
 //   2. 由 a_des 计算期望推力 + 机体系 z_B_des
 //   3. z_B_des + yaw_goal → 期望旋转矩阵 R_des（避免 Euler 奇异）
 //   4. 几何姿态误差（Lee）→ 3 轴力矩 τ_des
@@ -30,11 +38,18 @@ using drone_common::Wrench;
 using drone_common::MotorSq;
 
 struct Params {
-  // 位置环 PD（世界系每轴独立）
+  // 位置环 PID
   Vec3d Kp_pos{3.0, 3.0, 5.0};   // P
   Vec3d Kd_pos{1.5, 1.5, 2.5};   // D
   Vec3d Ki_pos{0, 0, 0};         // I（默认禁用，加才有防饱和）
   double Ki_max = 1.0;            // I 上限
+
+  // 非线性 P（用户设计）
+  double kp2 = 0.2;               // 非线性增益增长率（0=退化为线性P）
+  double confine = 2.0;           // P 线性区阈值 m
+  double kispeed = 1.0;           // 积分分离速度（越大越快衰减）
+  double error_scale = 1.0;       // 误差放大系数
+
   // 加速度限幅
   double a_xy_max = 5.0;          // 水平 m/s²
   double a_z_min = -3.0;          // 下降
@@ -84,6 +99,9 @@ class DroneController {
     if (p.mass <= 0) throw std::invalid_argument("Controller: mass <= 0");
     Binv_ = drone_common::buildMixerMatrixInverse(p.arm_length, p.k_F, p.k_M);
     ladrc_.configure(p.ladrc_b0, p.ladrc_wc, p.ladrc_wo, p.ctrl_dt);
+    prev_error_.setZero();
+    prev_deriv_.setZero();
+    integral_.setZero();
   }
 
   const Params& params() const { return params_; }
@@ -104,12 +122,6 @@ class DroneController {
   }
 
   // 每控制周期调一次：odom 状态 + 目标位姿 → 4 RPM
-  // odom_p = [x,y,z] 世界系
-  // odom_v = [vx,vy,vz]
-  // odom_q = q_WB
-  // odom_w = ω_B
-  // goal_p = 目标位置
-  // goal_yaw = 目标偏航 rad
   std::array<double, 4> step(
       const Vec3d& odom_p, const Vec3d& odom_v,
       const Quatd& odom_q, const Vec3d& odom_w,
@@ -121,25 +133,79 @@ class DroneController {
     Vec3d a_des;
 
     if (params_.control_mode == "ladrc") {
-      // LADRC 三轴独立计算（观测器已在内部更新）
       a_des = ladrc_.step(odom_p, goal_p);
     } else {
-      // PD + 可选积分 + 扰动前馈补偿
-      a_des = params_.Kp_pos.cwiseProduct(ep) + params_.Kd_pos.cwiseProduct(ev);
-      ep_integral_ += ep * params_.ctrl_dt;
-      ep_integral_ = ep_integral_.cwiseMin(params_.Ki_max).cwiseMax(-params_.Ki_max);
-      if (params_.Ki_pos.norm() > 1e-9)
-        a_des += params_.Ki_pos.cwiseProduct(ep_integral_);
-      // 慢速扰动观测器：稳态位置误差积分 → 估计外力 → 前馈补偿
-      dist_est_ += ep * params_.ctrl_dt * 0.3;  // 缓慢积分，避免振荡
-      dist_est_ = dist_est_.cwiseMax(-6.0).cwiseMin(6.0);  // ±6 m/s² 限幅
-      a_des += dist_est_;
+      // ===== 用户设计的非线性 PID（逐轴） =====
+      double dt = params_.ctrl_dt;
+      if (dt < 0.0001) dt = 0.005;  // safeguard
+
+      for (int axis = 0; axis < 3; ++axis) {
+        double e = params_.error_scale * ep[axis];
+        double abs_e = std::abs(e);
+
+        // ---- 非线性 P ----
+        // kp_eff(|e|) = (Kp+1)·exp((|e|-confine)·kp2) - 1
+        //   在 |e|=confine 处: kp_eff = Kp  → 与原始线性增益一致
+        //   在 |e|=0 处:      kp_eff = (Kp+1)·exp(-confine·kp2) - 1
+        //   合理约束: confine·kp2 = ln2 ≈ 0.693 → 零误差处 P 减半
+        double kp_eff = (params_.Kp_pos[axis] + 1.0) * std::exp((abs_e - params_.confine) * params_.kp2) - 1.0;
+
+        // ---- 积分分离：指数衰减 ----
+        double ki_eff = params_.Ki_pos[axis] * std::exp(-params_.kispeed * abs_e);
+
+        // ---- 不完全微分（一阶低通） ----
+        double raw_deriv = (e - prev_error_[axis]) / dt;
+        double deriv = raw_deriv * 0.5 + prev_deriv_[axis] * 0.5;
+
+        // ---- 梯形积分增量 ----
+        double once_i = ki_eff * 0.5 * (e + prev_error_[axis]) * dt;
+
+        // ---- 不含积分的输出 ----
+        double out_no_i = kp_eff * e + params_.Kd_pos[axis] * deriv;
+
+        // ---- 遇限削弱积分 (conditional anti-windup) ----
+        double out = out_no_i + integral_[axis];
+        double clamp_min = (axis == 2) ? params_.a_z_min : -params_.a_xy_max;
+        double clamp_max = (axis == 2) ? params_.a_z_max : params_.a_xy_max;
+
+        bool in_bounds = (out > clamp_min && out < clamp_max);
+        if (in_bounds) {
+          // 输出未饱和 → 正常累加积分
+          integral_[axis] += once_i;
+          out += once_i;
+          // 累加后可能过界，clamp 回去并反算积分
+          if (out > clamp_max) {
+            double excess = out - clamp_max;
+            integral_[axis] -= excess;
+            out = clamp_max;
+          } else if (out < clamp_min) {
+            double excess = out - clamp_min;
+            integral_[axis] -= excess;
+            out = clamp_min;
+          }
+        } else if ((out >= clamp_max && once_i < 0.0) ||
+                   (out <= clamp_min && once_i > 0.0)) {
+          // 已饱和但积分方向对抗饱和 → 可累加
+          integral_[axis] += once_i;
+          out += once_i;
+        }
+        // else: 已饱和且积分方向推动更饱和 → 跳过积分累加
+
+        // 积分限幅
+        integral_[axis] = std::clamp(integral_[axis], -params_.Ki_max, params_.Ki_max);
+
+        // 保存状态
+        prev_error_[axis] = e;
+        prev_deriv_[axis] = deriv;
+
+        a_des[axis] = out;
+      }
     }
 
     // 加速度限幅 & 远目标 failsafe（两种模式共用）
     if (ep.norm() > params_.d_far) {
       a_des = ep.normalized() * params_.a_max_vec;
-      ep_integral_.setZero();
+      integral_.setZero();
     }
     a_des.x() = std::clamp(a_des.x(), -params_.a_xy_max, params_.a_xy_max);
     a_des.y() = std::clamp(a_des.y(), -params_.a_xy_max, params_.a_xy_max);
@@ -159,7 +225,6 @@ class DroneController {
     Vec3d y_B_des = z_B_des.cross(x_c);
     double ny = y_B_des.norm();
     if (ny < 1e-9) {
-      // gimbal flip 附近退化：x_c 选与世界 x 正交替代
       x_c = Vec3d(1, 0, 0);
       y_B_des = z_B_des.cross(x_c);
       if (y_B_des.norm() < 1e-9) y_B_des = Vec3d(0, 1, 0);
@@ -178,7 +243,6 @@ class DroneController {
     Mat3d R_err = R_des.transpose() * R - R.transpose() * R_des;
     Vec3d e_R = 0.5 * drone_common::vee(R_err);           // 姿态误差
     Vec3d e_w = odom_w;                                   // ω_des = 0
-    // 期望力矩：−Kp_att ∘ e_R − Kd_rate ∘ e_w
     Vec3d tau = -params_.Kp_att.cwiseProduct(e_R) - params_.Kd_rate.cwiseProduct(e_w);
     tau.x() = std::clamp(tau.x(), -params_.tau_max, params_.tau_max);
     tau.y() = std::clamp(tau.y(), -params_.tau_max, params_.tau_max);
@@ -187,22 +251,21 @@ class DroneController {
     // 5. mixer 逆
     Wrench w; w << F, tau.x(), tau.y(), tau.z();
     MotorSq u = Binv_ * w;
-    // 非负 clamp（电机不反转）
     u = u.cwiseMax(0.0);
-    // ω² clamp
     double w2_max = params_.omega_max * params_.omega_max;
     for (int i = 0; i < 4; ++i) u(i) = std::min(u(i), w2_max);
 
     return motorSqToRpm(u);
   }
 
-  void resetIntegral() { ep_integral_.setZero(); dist_est_.setZero(); }
+  void resetIntegral() { integral_.setZero(); prev_error_.setZero(); prev_deriv_.setZero(); }
 
  private:
   Params params_;
   Eigen::Matrix4d Binv_;
-  Vec3d ep_integral_{0, 0, 0};
-  Vec3d dist_est_{0, 0, 0};  // 扰动估计 (m/s²)
+  Vec3d integral_{0, 0, 0};     // 积分累加器（逐轴）
+  Vec3d prev_error_{0, 0, 0};   // 上一帧误差（逐轴）
+  Vec3d prev_deriv_{0, 0, 0};   // 上一帧导数（逐轴）
   LADRC3D ladrc_;
 };
 
