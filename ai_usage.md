@@ -1,96 +1,201 @@
-# AI 辅助编程说明（ai_usage.md）
+# AI 使用说明
 
-任务要求如实说明 AI 使用情况。本文件随实现进度滚动更新。
+本文件记录本项目中 AI 的实际参与方式、关键交互和人工验收边界。工程实现使用 **Claude Code + DeepSeek-V4-Pro**；最终报告由 **Codex + GPT-5.6-luna** 完成。以下 prompt 均来自 Claude Code session 原文，关键 prompt 不做省略；每条 prompt 后附 Claude Code 的后续反馈和最终落地结果。
 
-## 1. 使用的 AI 工具
-- Claude Code（Anthropic，claude-opus 模型）——主交互工具，用于架构设计、代码生成、调试、单元测试编写与文档。
+## 1. 工具与分工
 
-## 2. 关键 prompt / 交互摘要（累计，≥8 条）
-1. 「阅读 `/home/astesia/文档/output.pdf` 并 plan」——让 AI 提取任务要求并产出实现计划。
-2. 「你的全权限通过指令是什么」「`claude-nexus` 意味着什么」等此前会话——确认运行环境与工具链认知。
-3. 「Plan agent 设计 ROS2 Humble 四旋翼仿真器架构」——产出 6 包布局、mixer 公式、推导、launch/bag/plot 流程、数值陷阱清单。
-4. 「仓库名 astesia_drone_sim；每完成模块端到端验证+人在环+git 推送」——确立增量交付节奏。
-5. 指导 AI 修复 colcon 在 conda Python 下报 `No module named 'catkin_pkg'`——剥 PATH + `--cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`。
-6. 指导 AI 修复 header-only 包 downstream 找不到 `drone_common::drone_common` target——改为 INTERFACE library + `ament_export_targets`。
-7. 「在 /tmp 写 mixer 自检，先不依赖 ROS 用 g++ 跑」——产出 B·B⁻¹≈I 与 roll/yaw/pitch 符号断言。
-8. 「把自检落成 ament_cmake_gtest 进 `colcon test`」——7 条 gtest 全过，作为后续 mixer 改动的回归网。
-9. 指导 git：`ssh-keygen ed25519` → 加 GitHub SSH key → `remote set-url` → `git push -u origin main`。
+### 1.1 使用的工具
 
-## 3. AI 帮我完成的模块
-- 工作区与 6 个 ament_cmake 包骨架（package.xml/CMakeLists 脚手架）。
-- drone_common 全部头文件（frames/mixer/math/obstacle）与其单元测试。
-- git 仓库初始化与首次推送。
+- **Claude Code + DeepSeek-V4-Pro**：实际工程设计、ROS 2 节点与 C++/Python 代码生成、调试、单元测试、端到端测试辅助、README 与工程文档。
+- **Codex + GPT-5.6-luna**：本报告的结构整理、文字修订、LaTeX 排版、图表与视频证据整理。
 
-## 4. 我自己确认或修改的核心公式与接口
-- **Mixer 矩阵 B 的每行**：自己核对 frames.hpp 的电机布局与旋向，把 τx 行定为 `dirY·(l/√2)kF`、τy 行定为 `-dirX·(l/√2)kF`、τz 行定为 `sgn·kM`。AI 初版 τy 符号方向我重新推了一遍叉乘再定稿。
-- **roll/yaw 符号断言**：坚持给 mixer 加 “+roll → 左侧电机快”、”+yaw → CCW 电机快” 这两条物理断言（而非仅 round-trip），由我要求加入；这是发现 mixer 符号错的唯一信号。
-- **四元数积分用 q⊗Ω 并每步归一化**（而非 Euler 角），由我确认这是 1 kHz 下的稳妥做法。
-- 接口顺序 `motor_rpm_cmd = [FL, FR, BL, BR]`：与 frames.hpp `MotorIndex` 枚举绑定，禁止各节点硬编码。
+### 1.2 人工完成与确认的部分
 
-## 5. AI 生成过的错误及修正
-- **conda Python 抢占 colcon**：CMake 报 `No module named 'catkin_pkg'`，因为 colcon 调到 `miniconda3/envs/writ/bin/python3`。→ 剥离 PATH 到系统目录 + `--cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`，且这是每次 colcon build 都须带上的。
-- **header-only 包无 imported target**：downstream `target_link_libraries(... drone_common::drone_common)` 报 `Target not found`。→ drone_common 建 INTERFACE library + `ament_export_targets(drone_common_targets)`，downstream 用同名命名空间 target。
-- **本包测试链接 ALIAS**：`ament_add_gtest` 的目标链 `drone_common::drone_common` 报 target not found。→ 本包内测试链本地非命名空间 `drone_common`，仅 downstream 用命名空间版本。
-- **git 首次 push `源引用规格 main 没有匹配`**：本地分支是 `master`。→ `git branch -M main`。
-- **git HTTPS 推送 `could not read Username`**：非交互环境无法输入凭据。→ 改用 SSH（生成 ed25519 key + 加 GitHub）。
-- **Assert 在 Release 被关掉**：在 mixer 加 `assert(k_F>0)` 等参数校验后，实测默认 Debug 构建会 abort 守住负参数（退出码 134），但 `-DNDEBUG`（Release/RelWithDebInfo）下 assert 被编译掉、默默放过错误。→ assert 只作 Debug 兜底，dynamics/controller 节点启动时还须显式 `RCLCPP_ERROR` 校验参数并退出（Step 2/3 落实）。常驻防炸（`wrenchToMotorSq` 的 `cwiseMax(0)` 非负 clamp）不依赖构建类型。
+我本人负责并最终确认：
 
-## 6. 如何验证动力学、控制器和 ROS2 topic 是否正确
-- **drone_common**：`colcon test` 跑 7 条 gtest，验证 B·B⁻¹≈I、hover/roll/yaw/pitch 符号、四元数积分解析一致性、vee(skew) 逆。回归网随仓库进 git。
-- **drone_dynamics（待 Step 2）**：零推力命令下应自由落体；给定 hover wrench 应保持悬停；`ros2 topic echo /drone/odom` 验帧率与 frame_id；rviz 见无人机 marker。
-- **drone_controller（待 Step 3）**：悬停 (0,0,1.5) 稳态误差 < 0.3 m（plot_bag 出位置误差曲线当证据）。
-- **ROS2 topic**：`ros2 topic list`/`info`/`echo` 逐个确认 topic 存在、类型与发布者订阅者对应；rosbag 录制 + plot_bag.py 复现为最终接受证据。
-- 验证策略：每个模块单独 build → 针对性 echo/plot → bag 出曲线，不口头声称通过。
+- 整体架构设计与功能取舍；
+- 动力学、坐标系、mixer、控制器等核心公式的物理核对；
+- 控制器参数的最终调整；
+- 验收端到端测试的实际执行与结果判断；
+- 报告内容的调整、取舍和最终定稿。
 
-## 更新历史
-- Step 0：占位骨架 + git（内容见 commit 6bf683b、5e36c28）
-- Step 1：drone_common mixer/frames/math/obstacle + gtest 7 通过
-- Step 2：drone_dynamics EOM + motor + odom/imu/path/tf（commit 870a8f5）
-- Step 3：drone_controller cascaded PD + bringup(no_planner) 悬停（commit f8cfb2e）
-- Step 4：go-to-goal + waypoint_sender 正方形航线（commit 9ac6eff）
-- Step 5：drone_map 确定性障碍物 + MarkerArray（commit aa6d159）
-- Step 6：drone_planner A* 膨胀栅格 + full.launch（commit aeac6ba）
-- Step 7：plot_bag + report + ai_usage 收尾
-- Step 8：四模式感知/规划（Global/FOV × 2D/3D）+ V2 简化 PID + 地面站升级 + 风扰/噪声模型 + FOV 可视化（v1.1.0 分支, 0426537）
+AI 主要负责：
 
-## 7. Steps 2-8 新增经验
+- 将确定的工程目标拆分为 ROS 2 包、节点、topic 和配置文件；
+- 具体工程设计与代码生成；
+- 根据测试日志定位问题并提出修复；
+- 编写单元测试、脚本化评测和辅助文档。
 
-### AI 完成的模块（续）
-- drone_dynamics 全部（dynamics.hpp, dynamics_node.cpp, dynamics.yaml, 风扰, IMU/Odom 噪声）
-- drone_controller 全部（controller.hpp, controller_node.cpp, controller.yaml, V2 PID, LADRC）
-- drone_map 全部（map_node.cpp, map.yaml, 显式+程序化障碍物）
-- drone_planner 全部（grid.hpp, astar.hpp, astar3d.hpp, perception.hpp, planner_node.cpp, planner.yaml）
-- voxel.hpp（3D 体素栅格 + FOV 锥体查询）
-- launch 文件（no_planner.launch.py, full.launch.py, multi_drone.launch.py）
-- 地面站 live_monitor.py（HTTP + rclpy + Chart.js 4 图表 + 完整控制面板）
-- 辅助脚本（waypoint_sender.py, trajectory_generator.py, ladrc_autotune.py, plot_bag.py, auto_eval.py, record_and_analyze.sh）
-- RViz 配置 drone.rviz
+AI 的建议不会自动视为通过。涉及物理符号、避障安全、控制性能和验收结论的内容，均以人工核对和实际运行证据为准。
 
-### 关键 prompt（续）
-10. 「动力学离线自检：零推力自由落体、hover 保持、roll 符号」——确认 EOM/mixer/积分正确
-11. 「单线程下 1kHz timer 饿死 RPM 订阅回调」→ 改为 MT executor + 独立 callback group
-12. 「路径平滑共线简化穿过了球体」→ Bresenham lineFree 碰撞检查
-13. 「YAML 的 string_array 参数在 launch 里不加载」→ 改为 explicit node parameters
-14. 「跨 replan 的 path_idx_ 越界导致跳过航点」→ clamp path_idx_ 到新路径 bounds
-15. 「四模式感知/规划设计」→ Global/FOV × 2D/3D 矩阵 + PerceptionEngine 路由
-16. 「PID 超调+收敛慢」→ V2 简化：线性 PD + 0.02m 死区积分 + 遇限削弱
-17. 「3D A* 实现」→ 26 连通 + 3D octile heuristic + 3D Bresenham 平滑
-18. 「地面站控制面板」→ Perception 面板 (Mode/Dim 下拉 + FOV 滑块) + 风扰/噪声面板
-19. 「RViz 侧栏消失 bug」→ rviz 配置去掉 Enabled: true 键恢复
+## 2. 关键 prompt 与 Claude Code 反馈
 
-### 自己确认/修改（续）
-- **Mixer 符号物理校验**：自己推了一遍 mixer τx 行的叉乘，确认「+roll→左电机快」物理正确
-- **防炸机制**：要求加 assert(k_F>0) 参数校验 + cwiseMax(0) 非负 clamp + NDEBUG 陷阱记录
-- **碰撞感知平滑**：要求 Bresenham 线检查而非仅几何共线判定 + 平滑坍塌保护
-- **障碍物布局**：自己设计 6 个障碍物位置，确保目标点 free 但直线全 blocked
-- **PD 调参**：自己调整 Kp/Kd 到 ζ≈0.7
-- **PID 设计方向**：要求学习 Python 参考代码的设计原则（分离、反饱和、死区）而非直接移植
+### Prompt 1：从任务书提取需求并确定系统范围
 
-### 新增错误及修正（续）
-- **1kHz timer 饿死订阅**：单线程 spin 下 1kHz wall_timer 占满 CPU，RPM 回调永远不触发。→ MT executor(2)+独立 callback group。**这是我以前不知道的 ROS2 坑。**
-- **ros2 topic echo --once 耗 1.5s**：每采一个数据点都重新启动 ros2 CLI。→ 改用 subprocess.Popen 后台管道持续读取
-- **非线性 PID 引入超调+收敛慢**：exp-based 非线性 P 公式 `(Kp+1)·exp((|e|-confine)·kp2) - 1` 实际行为与预期差很远。→ V2 简化为线性 PD + 死区积分
-- **LADRC 三轴独立模型发散**：解耦 LADRC 不捕捉姿态内环 + 推力矢量耦合。→ PD 保持默认，LADRC 降为实验性 bonus
-- **RViz 配置 Enabled: true 破坏面板**：为每个 Display 加 `Enabled: true` 键后侧栏消失。→ 恢复到不含 Enabled 键的格式
-- **conda Python 破坏 ros2 CLI**：`ros2 param set/get` 和 `ros2 topic echo` 全部报 `librcl_action.so` 找不到。→ 用 `/opt/ros/humble/bin/ros2` 直接调用 + `LD_LIBRARY_PATH`
-- **Bresenham 平滑坍塌路径**：3D 平滑 `smooth.size()<=2` 时静静返回空路径。→ 坍塌时 fallback 到原始路径
+**原始 prompt（完整保留）**
+
+> 阅读这份任务要求并plan'/home/astesia/文档/output.pdf'
+
+**Claude Code 后续反馈**
+
+Claude Code 先读取任务书并核查环境，随后指出 conda Python 3.11 与 ROS 2 Humble 的 `rclpy` 存在兼容性风险，因此建议核心动力学和控制器使用 C++，并把验收门槛明确为悬停误差小于 0.3 m、避障时实际轨迹与障碍物保持设定安全距离。它给出了包含动力学、控制器、地图、规划、RViz、README、报告和演示视频的完整交付范围。
+
+**实际结果**
+
+项目最终采用 C++ 核心节点、ROS 2 组件化包结构和 RViz/Web 可视化；Python 仅用于 waypoint、轨迹生成、监控和分析脚本，并通过系统 Python 运行以避开 conda 冲突。
+
+### Prompt 2：规定增量交付、人在环验证和 Git 推送节奏
+
+**原始 prompt（完整保留）**
+
+> 仓库命名astesia_drone_sim，此外后续每完成一个关键模块后就进行检验并让我一起人在环中端到端验证然后git推送
+
+**Claude Code 后续反馈**
+
+Claude Code 明确记录了两条约束：仓库名为 `astesia_drone_sim`；每完成一个关键模块，都要先进行端到端验证、由我参与人在环确认，然后再建立 commit 并推送。它将流程组织为“每个模块一个 commit → 构建/测试 → 人工确认 → push”，而不是把所有代码一次性堆到最后。
+
+**实际结果**
+
+工程按 `drone_common`、动力学、控制器、航点、地图、规划器、监控和报告等阶段推进。每阶段都留下构建、gtest、ROS 运行或曲线数据等证据；最终发布使用 `v1.1.0` 分支。
+
+### Prompt 3：为 mixer 增加参数防护和非负电机输出保护
+
+**原始 prompt（完整保留）**
+
+> 加入assert(k_F>0);
+> assert(k_M>0);
+> assert(arm_length>0);和u = B_inv*w;
+>
+> u = u.cwiseMax(0.0);来避免负数的炸机，然后可以继续了
+
+**Claude Code 后续反馈**
+
+Claude Code 将这两处修改解释为“防炸机制”：在构造 mixer 矩阵时用 `assert(k_F>0)`、`assert(k_M>0)` 和 `assert(arm_length>0)` 拦截无效物理参数；在 `wrenchToMotorSq` 中执行 `u = B_inv * w` 后，用 `u.cwiseMax(0.0)` 将负的平方转速裁为零。随后它又指出，Release 构建可能定义 `NDEBUG`，因此 assert 不能作为唯一的运行时保护，动力学/控制器节点还需要显式参数检查和错误退出。
+
+**实际结果**
+
+`drone_common` 的 mixer 同时具备 Debug 断言和运行时安全策略，并通过 hover、roll、pitch、yaw 符号测试以及 `B·B^{-1}\approx I` 回归测试。非负 clamp 不依赖构建类型，避免非法平方转速继续传入电机模型。
+
+### Prompt 4：排查规划路径穿过球形障碍物
+
+**原始 prompt（完整保留）**
+
+> 大部分情况是对的，但是有的时候规划会直接冲过中间的球体，我很确定规划和实际轨迹都穿过了那个球体，检查问题
+
+**Claude Code 后续反馈**
+
+Claude Code 对 A* 原始路径、路径平滑和障碍物膨胀逐段检查后，定位到：路径平滑的共线点简化删除了 A* 绕行所需的拐点，但删除后没有验证新生成的直线段是否仍然无碰撞，因此新直线可能直接穿过球体。修复方案是对每一条候选平滑线段执行 Bresenham 栅格碰撞检查，只有 `lineFree()` 通过才允许删除中间航点。
+
+**实际结果**
+
+规划器从“只检查离散 A* 路径”升级为“原始路径、膨胀栅格和每段平滑结果都检查”。这条交互也促成了报告中对碰撞检测、安全距离和失败案例的明确说明。
+
+### Prompt 5：排查规划器跳过中间航点
+
+**原始 prompt（完整保留）**
+
+> 我注意到在某一步规划中，明明有三个规划点，但是无人机直接飞去了第二个规划点再飞去第三个（最后一个）规划点，这是什么原因
+
+**Claude Code 后续反馈**
+
+Claude Code 检查 `lookahead` 和 `safe_goal` 更新逻辑后发现，旧逻辑在第一个航点距离当前位置较近时会累积距离并一次跨过多个 waypoint，导致 `safe_goal` 从起点附近直接跳到第二个或第三个点。修复为：每次重规划只允许向前推进一个 waypoint，并对新路径索引做边界限制；跨次重规划使用单调的 `last_look_i_`，不再使用旧路径索引直接访问新路径。
+
+**实际结果**
+
+`/drone/safe_goal` 的推进变成可观察、单调、逐点的过程。规划路径和控制器目标之间的关系也在地面站及报告中分开记录，避免把 planner goal 与实际控制目标混为一谈。
+
+### Prompt 6：恢复 PD，并加入可切换 LADRC 与自动调参方案
+
+**原始 prompt（完整保留）**
+
+> 首先恢复上一次的pd内部控制参数，然后加入可切换的ladrc控制模式并自动调参，方法可参考（方法 1：基于优化的黑盒调参（推荐，适合仿真环境）
+>
+> 你可以在 ROS2/Gazebo 仿真里，利用 Python 极其丰富的优化库（比如 scipy.optimize 或者贝叶斯优化 Optuna）来写一个自动调参节点。
+>
+> 实现步骤：
+>
+> 参数暴露： 把你的 ADRC 参数（
+> 先不进入下一step，
+> ωc,b0
+> ）写成 ROS2 的动态参数（rclcpp::Parameter）。
+>
+> 编写自动机（Python节点）： 用 Python 写一个 Node，负责给无人机发送方波指令（比如让飞机在 Z 轴上下跳动）。
+>
+> 收集误差（Cost）： Python 节点订阅无人机的 /odom (位置) 话题，计算目标轨迹和实际轨迹的误差（比如计算 RMSE 均方根误差）。
+>
+> 算法自动迭代： Python 节点里的优化算法（如贝叶斯优化）会根据误差自动计算出一组新的（
+> ωc,b0
+> ），通过 ros2 param set 接口动态发送给飞控节点。
+>
+> 重复几百次（在仿真里开启倍速，几分钟就跑完了），就能得到最优的 ADRC 参数。
+>
+> 方法 2：系统辨识（System Identification）
+>
+> 上面说过，ADRC 最难定的是 b0（系统的惯性/增益）。只要 b0 准了，剩下闭着眼睛调带宽就行。
+>
+> 你可以在 ROS2 中给电机发送一段扫频信号（Chirp signal）。
+>
+> 用 ROS2 录制一个 rosbag，记录输入（电机 PWM）和输出（加速度/角速度）。
+>
+> 用 MATLAB 的 System Identification Toolbox 或者 Python 的辨识库，算出一阶模型的增益 b，直接把它填入 ADRC 的 b0 参数中。
+>
+> 剩下的带宽参数，在飞行时通过 ROS2 的 rqt 动态参数面板（GUI），拖动滑块找个手感最好的就行了。）
+
+**Claude Code 后续反馈**
+
+Claude Code 先恢复稳定的 PD 默认路径，再实现 LADRC 的独立模式和调参脚本。调参过程使用位置误差 cost，并遇到每轮 cost 都为 999、LADRC 发散等实际问题；随后它通过日志和仿真复现修复 cost 采集，并把 LADRC 降为实验性模式，PD 保持默认。它还明确指出：解耦的三轴 LADRC 没有完整捕捉姿态内环与推力矢量耦合，不能把黑盒搜索结果直接当成“理论最优”。
+
+**实际结果**
+
+工程保留了可切换 LADRC 和 `ladrc_autotune.py`，但验收默认使用经过验证的串级 PD；报告中对 LADRC 的实验性质和局限性作了如实说明。
+
+### Prompt 7：要求从已知模型推导 PD 参数，而不是凭感觉调参
+
+**原始 prompt（完整保留）**
+
+> 我有个问题，在仿真的情况下我们应该是可以算出来理论的最优pd控制参数吧
+
+**Claude Code 后续反馈**
+
+Claude Code 根据已知的电机一阶滞后和位置二阶积分模型，写出三阶闭环特征方程
+`\tau_m s^3+s^2+K_d s+K_p=0`，再用期望阻尼比和带宽进行极点配置。反馈同时指出，理论值若直接套用会因加速度限幅进入饱和区，线性模型的“最优”不再成立；因此理论推导只能确定参数范围和阻尼关系，最终仍要结合限幅、目标距离和实际轨迹数据验收。
+
+**实际结果**
+
+PD 参数文件顶部加入了推导注释，控制器使用位置环 PD、姿态环和限幅/抗饱和策略。最终参数不是未经验证的数学宣称，而是经过公式核对、仿真和端到端测试后的工程参数。
+
+### Prompt 8：要求端到端数据真实、完整并循环修复
+
+**原始 prompt（完整保留）**
+
+> 我所说的端到端测试包含数据正常正确，现在几乎所有条目都是空的而且数值也不正确。你对这个策略有 100% 的信心吗？如果没有，找出所有可能的漏洞，建议适当的修复措施，并运行这个循环，直到你对新策略有事实上的 100% 信心
+
+**Claude Code 后续反馈**
+
+Claude Code 没有把“页面能打开”当成测试通过，而是从 `ros2 topic echo --field` 的输出格式、Marker 边界、管道竞态、障碍物数量统计、最小距离计算、RPM 饱和判定和 JavaScript 图表绘制逐项排查。期间发现过空图、距离恒为零、只显示一条障碍物曲线、端口占用和图表缺少参考线等问题，进行了多轮修复，并在能取得真实 topic 数据后才提交相关改动。
+
+**实际结果**
+
+最终验收采用 rosbag、CSV、轨迹图、位置误差图、RPM 图和最小障碍物距离数据交叉核对；报告明确区分成功场景与风险/失败场景，不用一张理想曲线替代完整端到端证据。
+
+## 3. AI 生成内容与人工验收边界
+
+AI 生成或大幅辅助生成的内容包括：六个 ROS 2 包的骨架、动力学/控制器/地图/规划器节点、mixer 与数学头文件、A* 与 3D 体素感知、地面站、测试和分析脚本、launch/YAML/RViz 配置及工程文档。
+
+人工重点核对：ENU 坐标系和电机编号、mixer 的 roll/pitch/yaw 符号、推力与重力方向、四元数积分、障碍物膨胀和碰撞安全距离、控制器参数、验收指标及视频/曲线是否与实际运行相符。
+
+## 4. 已知问题与反思
+
+- conda Python 会抢占 ROS 2 的系统 Python，导致 `rclpy` 和 `ros2` CLI 加载失败；运行脚本时必须使用系统环境。
+- 文本解析 `ros2 topic echo` 适合快速原型，但不如原生 `rclpy` 订阅稳定；这也是地面站调试耗时较长的根本原因。
+- LADRC 的解耦假设不足以代表完整四旋翼耦合动力学，因此默认验收仍采用 PD。
+- 开启 IMU 测量误差后，无人机跟踪的静差问题尚未完全优化；风动扰动下的恢复还可以更快。
+- 如果继续投入时间，希望引入论文 *RAPTOR: A Foundation Policy for Quadrotor Control* 中的策略，用于提升泛化能力和控制性能。
+
+## 5. 记录来源
+
+本文件依据 Claude Code session：
+
+`E:\星光\drone_ros——claudecode\00ce7beb-1389-4c24-be7d-51c02624e160.jsonl`
+
+报告和视频对应仓库的 `v1.1.0` 分支；本文件只记录 AI 使用事实，不把 AI 的建议自动等同于工程验收结论。
