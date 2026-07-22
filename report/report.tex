@@ -1,4 +1,4 @@
-% !TEX program = lualatex
+% !TEX program = xelatex
 % -*- coding: utf-8 -*-
 % =============================================================================
 % asteesia_drone_sim — 四旋翼无人机仿真器技术报告
@@ -6,31 +6,30 @@
 % 编译: lualatex report.tex && lualatex report.tex
 % 依赖: texlive-latex-extra texlive-luatex 及系统已装 Noto CJK 字体
 % =============================================================================
-\documentclass[12pt,a4paper]{article}
+\documentclass[10pt,a4paper]{article}
 
 % ---- geometry ----
-\usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage[top=1.8cm, bottom=1.8cm, left=2.0cm, right=2.0cm]{geometry}
 \usepackage{setspace}
-\onehalfspacing
+\setstretch{1.05}
 
 % ---- CJK / fonts (LuaLaTeX native Unicode) ----
 \usepackage{fontspec}
-% AR PL UMing: full CJK + Latin coverage, Light weight
-% FakeBold for section headings (AR PL fonts have no real Bold)
-\setmainfont{AR PL UMing CN}[
-  BoldFont={AR PL UMing CN},
-  BoldFeatures={FakeBold=2.5},
-]
-\setsansfont{AR PL UKai CN}[
-  BoldFont={AR PL UKai CN},
-  BoldFeatures={FakeBold=2.5},
-]
-\setmonofont{DejaVu Sans Mono}[Scale=0.9]
+\usepackage{xeCJK}
+% Noto CJK is available in the Windows LaTeX build environment.
+\setmainfont{Noto Serif SC}
+\setsansfont{Noto Sans SC}
+% Use the same CJK-capable family for \texttt{} content such as Chinese paths.
+\setmonofont{Noto Sans SC}[Scale=0.9]
+\setCJKmainfont{Noto Serif SC}
+\setCJKsansfont{Noto Sans SC}
+\setCJKmonofont{Noto Sans SC}[Scale=0.9]
 
 % ---- No CJK package needed: LuaLaTeX renders Unicode natively ----
 
 % ---- packages ----
 \usepackage{graphicx}
+\graphicspath{{figures/}}
 \usepackage{float}
 \usepackage{subcaption}
 \usepackage{tikz}
@@ -125,16 +124,19 @@
 \textbf{技术报告}\\[6pt]
 本报告系统阐述四旋翼无人机仿真器的架构设计、动力学建模、控制器推导、\\
 四模式感知/避障规划、可视化方案和实验结果。所有源代码与文档开源在\\[4pt]
-\href{https://github.com/bestastesia/astesia_drone_sim}
-     {\texttt{github.com/bestastesia/astesia\_drone\_sim}}\\[4pt]
+\href{https://github.com/bestastesia/astesia_drone_sim/tree/v1.1.0}
+     {\texttt{github.com/bestastesia/astesia\_drone\_sim/tree/v1.1.0}}\\[4pt]
+本报告对应最新的 \texttt{v1.1.0} 分支（不是 \texttt{main}）。\\[4pt]
 演示视频共 10 段，覆盖全部验收场景及 bonus 测试。
 \end{minipage}
 \end{center}
 \vspace{10pt}
 
-\begin{tcolorbox}[colback=yellow!5, colframe=yellow!60, title={演示视频路径}]
-  \small\texttt{/media/astesia/OS/Users/16021/Desktop/保研\_套磁资料/}\\
-  \texttt{0中山大学/中山考核面试/}
+\begin{tcolorbox}[colback=yellow!5, colframe=yellow!60, title={GitHub 演示视频}]
+  \small 10 段演示视频均已随报告提交到 GitHub：\\
+  \href{https://github.com/bestastesia/astesia_drone_sim/tree/v1.1.0/report/videos}
+       {\texttt{report/videos/}}\\
+  文件名与第 6 节场景一一对应；本地录制目录仅作为原始素材来源。
 \end{tcolorbox}
 
 % ---- TOC ----
@@ -511,6 +513,13 @@ TF & 坐标轴 (红$=+x$, 绿$=+y$, 蓝$=+z$) & --- \\
 
 \textbf{控制面板}：目标点下发、感知模式切换 (Global/FOV, 2D/3D)、FOV 参数滑块 (H/V/Range)、控制器热调参 (8 滑块)、风扰/噪声开关与预设 (Light/Medium/Strong)、紧急停机。Ctrl+C 退出时自动保存 \texttt{dashboard\_log.csv}。
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{ground_station.png}
+\caption{地面站 Web Dashboard 实际界面截图（v1.1.0）。}
+\label{fig:ground-station}
+\end{figure}
+
 
 % ==============================================================================
 \section{实验结果}
@@ -525,7 +534,7 @@ TF & 坐标轴 (红$=+x$, 绿$=+y$, 蓝$=+z$) & --- \\
 \footnotesize
 \begin{tabularx}{\textwidth}{c l c p{3.8cm}}
 \toprule
-\textbf{\#} & \textbf{场景} & \textbf{结果} & \textbf{演示视频} \\
+\textbf{\#} & \textbf{场景} & \textbf{结果} & \textbf{GitHub 视频文件 (v1.1.0/report/videos)} \\
 \midrule
 1 & 悬停 (0,0,1.5), 8s        & $\checkmark$ & \texttt{1初始高度改变的悬停.mp4} \\
 2 & 定点飞行 (2,1,1.5)         & $\checkmark$ & \texttt{2定点飞行.mp4} \\
@@ -542,8 +551,8 @@ B2 & 任意轨迹跟踪 (8 形)        & $\checkmark$ & \texttt{8任意轨迹跟
 \end{tabularx}
 \end{table}
 
-所有视频位于：\texttt{/media/astesia/OS/Users/16021/Desktop/} \\
-\texttt{保研\_套磁资料/0中山大学/中山考核面试/}
+视频链接目录：\href{https://github.com/bestastesia/astesia_drone_sim/tree/v1.1.0/report/videos}
+{\texttt{github.com/.../tree/v1.1.0/report/videos}}。表中列出的文件名可直接在该目录打开。
 
 \subsection{关键性能指标}
 
@@ -567,6 +576,34 @@ RPM 悬停稳态 & hover 1.5m, 4 电机均值 & $[14.9, 15.1]$ \\
 \bottomrule
 \end{tabularx}
 \end{table}
+
+\subsection{可复现实测曲线}
+
+为避免只报告预录视频的结论，使用本分支在 Ubuntu 24.04/ROS 2 Jazzy
+下重新录制了一段 27.98 s 的正方形航线（SQLite rosbag：2799 条
+\topic{/drone/odom}）。图~\ref{fig:measured-curves} 是由
+\texttt{make\_experiment\_figures.py} 从 CDR 消息直接解码得到的曲线。
+该次测试末状态为 $(0.000,0.004,1.500)$ m，最大位置误差为 2.892 m；
+由于采用无规划器正方形航线且起点邻近显式障碍物，计算出的最小净空为
+$-0.593$ m，属于有意保留的失败/风险案例，而非安全绕障结论。
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.32\textwidth}
+  \includegraphics[width=\linewidth]{trajectory_xy.png}
+  \caption{XY 轨迹}
+\end{subfigure}\hfill
+\begin{subfigure}{0.32\textwidth}
+  \includegraphics[width=\linewidth]{position_error.png}
+  \caption{位置误差}
+\end{subfigure}\hfill
+\begin{subfigure}{0.32\textwidth}
+  \includegraphics[width=\linewidth]{obstacle_clearance.png}
+  \caption{障碍物净空}
+\end{subfigure}
+\caption{v1.1.0 分支独立复现实测（无规划器正方形航线）。}
+\label{fig:measured-curves}
+\end{figure}
 
 \subsection{控制性能分析}
 
@@ -615,12 +652,17 @@ RPM 悬停稳态 & hover 1.5m, 4 电机均值 & $[14.9, 15.1]$ \\
 % ==============================================================================
 
 \subsection{使用的 AI 工具}
-Claude Code (Anthropic，claude-opus 模型)——用于架构设计、代码生成、调试、单元测试与文档。人类负责：核心公式物理核对、参数最终调整、障碍物布局设计、验收测试执行、报告撰写。
+整个工程实现阶段使用 Claude Code + DeepSeek-V4-Pro 完成协作式工程设计、代码生成、调试、单元测试与文档工作；本份报告则由 Codex + GPT-5.6-luna 完成整理、改写、排版和交付校验。AI 输出均经过人工运行验证，不将生成内容直接视为实验事实。
+
+\subsection{人与 AI 的分工}
+本人负责整体架构设计、核心公式物理核对、参数最终调整、验收端到端测试执行，以及报告内容的调整与最终确定。AI 主要负责实际工程设计的展开、代码生成、单元测试与文档初稿；涉及动力学符号、控制分配、障碍物布局和验收结论的部分由本人确认后才纳入工程。
 
 \subsection{AI 完成的模块}
 工作区骨架 (6 包)、drone\_common 全部头文件 + 8 条 gtest、drone\_dynamics (EOM + 电机 + 风扰 + IMU/Odom 噪声)、drone\_controller (V2 线性 PD + Lee 姿态 + LADRC)、drone\_map (显式/程序化)、drone\_planner (grid/astar/astar3d/perception 四模式)、launch 文件 (3)、地面站 (HTTP + Chart.js + 控制面板)、全部辅助脚本、RViz 配置、README 与文档。
 
 \subsection{人类确认/修改的核心内容}
+Claude Code 调教记录显示，开发过程采用“先约束接口与验收标准，再迭代实现—构建—测试—修正”的方式：先固定 ROS 2 topic、频率和消息类型，再要求 AI 将动力学、控制、地图和规划拆成可独立验证的包；每次出现编译、运行或物理符号问题，都以终端日志和端到端现象作为下一轮修改依据。该过程避免了只根据代码阅读宣称通过。
+
 \begin{itemize}[nosep]
   \item Mixer $\mathbf{B}$ 各行符号：自行推导叉乘，确认 $\tau_x$ (roll)、$\tau_y$ (pitch)、$\tau_z$ (yaw) 物理正确
   \item roll/yaw 符号断言：要求 gtest 加「+roll $\to$ 左电机快」「+yaw $\to$ CCW 电机快」物理断言
@@ -631,6 +673,7 @@ Claude Code (Anthropic，claude-opus 模型)——用于架构设计、代码生
 \end{itemize}
 
 \subsection{AI 产生的关键错误及修正}
+会话中还反复强调了“可运行证据优先”的约束：AI 不能用理想化曲线替代 rosbag/地面站记录，不能把 planner 的目标点误写成控制器实际接收的 safe\_goal，也不能把一次编译成功扩大解释为整套验收通过。最终采用人工核对公式、人工选择参数、脚本化测试和视频复核的闭环。
 \begin{itemize}[nosep]
   \item \textbf{1kHz timer 饿死订阅}：单线程 spin 下 RPM 回调永不触发。$\to$ MT executor(2)+独立 callback group
   \item \textbf{非线性 PID 超调+收敛慢}：exp 型 P 公式实际偏差大。$\to$ V2 简化为线性 PD + 死区积分
@@ -651,6 +694,7 @@ Claude Code (Anthropic，claude-opus 模型)——用于架构设计、代码生
   \item \textbf{完整实验数据自动化 pipeline}：当前手动 rosbag + 地面站 CSV。应建 CI——每 commit 触发 6 场景录制 + 自动出图 + 数值断言，形成可追溯性能回归基线
   \item \textbf{多无人机协同避障}：\texttt{multi\_drone.launch.py} 仅命名空间隔离。可加 central planner 做 mutual avoidance
   \item \textbf{单元测试扩展}：仅 drone\_common 有 gtest。dynamics/controller/planner 核心逻辑均应加入回归测试
+  \item \textbf{传感器与扰动下的稳态优化}：开启 IMU 测量误差后，无人机跟踪的静差尚未完全优化；风动扰动后的恢复速度也还可以进一步加快。
 \end{enumerate}
 
 \subsection{更深入的方向}
@@ -662,12 +706,9 @@ Claude Code (Anthropic，claude-opus 模型)——用于架构设计、代码生
   \item \textbf{机载计算延迟模拟}：planner 加入 50-100ms 延迟，验证控制器在规划滞后下的鲁棒性
   \item \textbf{CI/CD}：GitHub Actions 自动 colcon build + test，每 PR 跑全验收
   \item \textbf{真实硬件部署}：适配 PX4/ArduPilot 接口，在真机上验证控制参数
+  \item \textbf{泛化策略控制}：如果有更多时间，希望引入论文 \emph{RAPTOR: A Foundation Policy for Quadrotor Control}（Eschmann, Albani, Loianno，\href{https://arxiv.org/abs/2509.11481}{arXiv:2509.11481}）中的策略思路，在不同动力学、风扰和传感器条件下研究策略泛化与更好的控制性能，并与当前解析控制器做安全约束下的对比。
 \end{enumerate}
 
 
 % ==============================================================================
-\section*{致谢}
-% ==============================================================================
-感谢以下开源项目的启发：pengyu\_sim (ROS1 动力学)、MARSIM (点云感知)、Eigen3 (线性代数)、Chart.js (地面站可视化)。
-
 \end{document}

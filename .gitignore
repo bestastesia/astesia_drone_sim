@@ -22,3 +22,9 @@ report/bags/*.db3
 report/bags/*.mcap
 *.db3
 *.mcap
+
+# LaTeX build intermediates; report.pdf is the deliverable.
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
