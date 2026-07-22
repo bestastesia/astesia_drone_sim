@@ -1,4 +1,12 @@
-# 报告占位
+# Report Directory
 
-最终报告（6-10 页）将放在这里，按任务要求包含：
-系统架构图 / 动力学模型 / 控制器设计 / 地图与避障 / 可视化 / 实验结果 / 与参考仓库关系 / AI 使用 / 反思。
+The detailed technical report is in `report.md`.
+
+## Contents
+- **report.md** — Full technical report (system architecture, dynamics, controller design, 4-mode perception/planning, visualization, experimental results, references, AI usage, reflections)
+- **verification_guide.html** — Step-by-step guide with copy-paste commands for recording all 6 evaluation scenarios
+
+## Related Documents
+- `../README.md` — Project README (build, run, configure, troubleshoot)
+- `../ai_usage.md` — AI-assisted programming disclosure
+- `../drone_bringup/config/parameter_reference.yaml` — Unified parameter reference for all nodes
